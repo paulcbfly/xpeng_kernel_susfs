@@ -1,6 +1,11 @@
 # xpeng_kernel_susfs
 
+> **⚠️ IMPORTANT: This repository and its kernel-side SUSFS integration are 100% AI-GENERATED (100% 由 AI 生成).**
+> The build scripts are forked from [LuoJuly/android_kernel_motorola_xpeng_build](https://github.com/LuoJuly/android_kernel_motorola_xpeng_build); the SUSFS kernel adaptation was produced by an AI agent following [LuoJuly's reference commit](https://github.com/LuoJuly/android_kernel_motorola_sm7325/commit/2fa1be6d5a63d3958ab2babd56b61f561f74095b), then debugged and verified entirely through automated tooling. Use at your own risk.
+
 Build scripts for Motorola **xpeng** (Moto G200 5G / Edge S30) kernel + WLAN, plus **ReSukiSU + SUSFS** boot / AnyKernel3 GitHub Actions.
+
+> ⚠️ **AI 接管提示**: 接手前请先阅读 [`docs/AI_HANDOVER.md`](docs/AI_HANDOVER.md) —— 里面记录了本次适配遇到的**全部编译问题及解决方案**、GitHub Actions 编译流程、验证方法。下一个 AI 直接照此接管即可。
 
 > Fork of [`LuoJuly/android_kernel_motorola_xpeng_build`](https://github.com/LuoJuly/android_kernel_motorola_xpeng_build) with **SUSFS (v2.2.0)** support added to the kernel, adapted from [LuoJuly/android_kernel_motorola_sm7325 commit 2fa1be6](https://github.com/LuoJuly/android_kernel_motorola_sm7325/commit/2fa1be6d5a63d3958ab2babd56b61f561f74095b) for the MMI 5.4.302 tree.
 
