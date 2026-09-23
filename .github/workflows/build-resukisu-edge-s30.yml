@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       update_resukisu:
-        description: "Update ReSukiSU submodule to latest main"
+        description: "Update ReSukiSU submodule to latest main (WARNING: requires SUSFS v2.3+ kernel patches)"
         required: false
-        default: true
+        default: false
         type: boolean
 
 permissions:
@@ -67,7 +67,7 @@ jobs:
           BUILD_WLAN: "true"
           KERNEL_VER_LABEL: "5.4.302"
           ROM_ID: S3RXC32.33-8-25
-          UPDATE_RESUKISU: ${{ github.event_name == 'schedule' || inputs.update_resukisu }}
+          UPDATE_RESUKISU: ${{ inputs.update_resukisu || 'false' }}
           KERNEL_URL: https://github.com/paulcbfly/android_kernel_motorola_xpeng.git
           KERNEL_BRANCH: 5.4.302-s3rxc32.33-8-25-susfs
           CLANG_GIT_URL: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86

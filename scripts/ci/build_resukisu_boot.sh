@@ -148,13 +148,19 @@ update_resukisu() {
     git submodule update --init --recursive KernelSU
   fi
 
-  if [[ "${UPDATE_RESUKISU:-true}" == "true" ]]; then
+  # ReSukiSU origin/main tracks simonpunk's latest susfs (v2.3+) which is NOT
+  # compatible with the kernel-side SUSFS v2.2.0 integration in this branch.
+  # Default: pin to the v2.2.0-compatible commit recorded in this fork's gitlink.
+  RE_SUKISU_PIN="${RE_SUKISU_PIN:-59c99fdf1735c37681ff18c7ffd7834741dcccbf}"
+  if [[ "${UPDATE_RESUKISU:-false}" == "true" ]]; then
     git -C KernelSU fetch --unshallow origin 2>/dev/null || true
     git -C KernelSU fetch origin main --tags --force
     git -C KernelSU checkout -f origin/main
-    info "ReSukiSU updated to origin/main"
+    info "ReSukiSU updated to origin/main (NOTE: latest main requires SUSFS v2.3+ kernel patches; build may fail)"
   else
-    info "ReSukiSU kept at current checkout (UPDATE_RESUKISU=false)"
+    git -C KernelSU checkout -f "${RE_SUKISU_PIN}" 2>/dev/null \
+      || git -C KernelSU checkout -f FETCH_HEAD 2>/dev/null || true
+    info "ReSukiSU pinned to ${RE_SUKISU_PIN} (SUSFS v2.2.0 compatible; UPDATE_RESUKISU=false)"
   fi
 
   RESUKISU_VERSION="$(git -C KernelSU describe --tags --always)"
