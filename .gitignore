@@ -1,0 +1,30 @@
+# Build outputs
+/out/
+/.ci-work/
+/.ci-src/
+/.ci-toolchain/
+*.log
+*.o
+*.a
+*.lto.o
+
+# WLAN trees are cloned by setup.sh (nested git repos + build dirs)
+/vendor/
+
+# Local toolchains / Lineage symlinks (fetched by setup.sh)
+/prebuilts/clang/
+/prebuilts/gcc/
+/prebuilts/build-tools
+/prebuilts/misc
+
+# Kernel tree is a separate repo (symlink/clone; never upload sources)
+/kernel/msm-5.4
+/kernel/msm-5.4/
+
+# Large OEM boot (uploaded separately as Release asset z-assets-S3RXC32.33-8-29)
+/prebuilt/boot_oem.img
+/prebuilt/*.img
+
+# Local helpers
+/bin/python
+/header
