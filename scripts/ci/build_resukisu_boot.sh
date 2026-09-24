@@ -450,11 +450,18 @@ build_kernel() {
 
   if [[ "${ENABLE_BBGUARD}" == "true" ]]; then
     "${kconfig_tool}" --file "${cfg}" --enable BBG || true
+    "${kconfig_tool}" --file "${cfg}" --set-str CONFIG_LSM "lockdown,yama,loadpin,safesetid,integrity,selinux,smack,tomoyo,apparmor,bpf,baseband_guard" || true
   else
     "${kconfig_tool}" --file "${cfg}" --disable BBG || true
+    # Restore MMI-baseline LSM list when Baseband-guard is off (avoid dangling
+    # "baseband_guard" name in CONFIG_LSM string).
+    "${kconfig_tool}" --file "${cfg}" --set-str CONFIG_LSM "lockdown,yama,loadpin,safesetid,integrity,selinux,smack,tomoyo,apparmor" || true
   fi
 
   if [[ "${ENABLE_BBRV3}" == "true" ]]; then
+    # BBRv3 upstream backport was REMOVED (unconditional tcp.h/tcp_rate.c changes
+    # broke the stock 5.4 TCP stack -> boot hang). Stock 5.4 BBR can still be
+    # selected here, but default stays cubic like the MMI baseline.
     "${kconfig_tool}" --file "${cfg}" --enable TCP_CONG_BBR || true
     "${kconfig_tool}" --file "${cfg}" --enable DEFAULT_BBR || true
     "${kconfig_tool}" --file "${cfg}" --set-str DEFAULT_TCP_CONG bbr || true
