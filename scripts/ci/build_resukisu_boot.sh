@@ -46,7 +46,7 @@ BUILD_WLAN="${BUILD_WLAN:-true}"
 WLAN_TAG="${WLAN_TAG:-MMI-S3RXC32.33-8-29}"
 
 KERNEL_URL="${KERNEL_URL:-https://github.com/paulcbfly/android_kernel_motorola_xpeng.git}"
-KERNEL_BRANCH="${KERNEL_BRANCH:-5.4.302-s3rxc32.33-8-25-modules}"
+KERNEL_BRANCH="${KERNEL_BRANCH:-5.4.302-s3rxc32.33-8-25-modules-nosec}"
 KERNEL_DIR="${KERNEL_DIR:-${BUILD_ROOT}/.ci-src/android_kernel_motorola_xpeng}"
 
 case "${VARIANT}" in
