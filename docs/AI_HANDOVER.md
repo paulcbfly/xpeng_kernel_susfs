@@ -245,3 +245,52 @@ export KERNEL_BRANCH=5.4.302-s3rxc32.33-8-25-susfs
 ---
 
 *文档生成时间：2026-09-23。作者：AI 助手（100% AI-generated project）。*
+---
+
+# 附录 B：二次开发（2026-09-24）— 模块扩展 + 谷歌安全补丁
+
+## 新增内核分支
+`paulcbfly/android_kernel_motorola_xpeng` 分支 **`5.4.302-s3rxc32.33-8-25-modules`**
+= `5.4.302-s3rxc32.33-8-25-susfs`（SUSFS v2.2.0 基座）+ commit `8f74e34f6`：
+
+| 模块 | 来源（LuoJuly sm7325 lineage-23.2-SUSFS） | 移植方式 |
+|------|------|------|
+| **Re:Kernel** | commit b133a190c + b68efe6b2 | drivers/rekernel/ 直接拷贝最终版 + binder.c/signal.c hooks 手动移植 + drivers/Kconfig/Makefile |
+| **Baseband-guard (BBGuard)** | commit 41952b459 + 8bb2555cd | `git submodule add vc-teahouse/Baseband-guard`（pin cef0daa）+ security/baseband-guard 软链接 + security/Kconfig+Makefile |
+| **BBRv3** | commit 899d12128 | git apply 成功（tcp_bbr.c 1672 行与 lj_susfs 完全一致 + tcp.h/tcp_rate.c） |
+| **DroidSpaces** | commit 8b6309cd7 | 仅 defconfig（IPC/PID NS、DEVTMPFS、netfilter、IP_SET、TMPFS xattr/acl） |
+| **谷歌安全补丁** | lj_susfs 内 net/ 上游修复（来自 AOSP/LineageOS） | 8 个 CVE 修复全部 git apply 成功：af_packet fanout UAF、skbuff shared-frag×2、pskb_carve zerocopy、ipv6 icmp/ip6_tunnel cb[] 泄露、tipc double-free、nfc llcp UAF |
+
+## 本次坑（新增）
+1. **drivers/net/Kconfig 残留**：先应用了 b68efe6b2（netlink 版，注册 drivers/net/rekernel），
+   后应用 b133a190c（迁移到 drivers/rekernel）时旧 Kconfig 引用没删 → `olddefconfig` 报
+   `can't open file "drivers/net/rekernel/Kconfig"`。**修复**：`sed -i` 删除
+   `drivers/net/Kconfig` 的 source 行和 `drivers/net/Makefile` 的 obj 行。
+   （若直接从最终版拷贝可完全避免此问题）
+2. **rtmutex BACKPORT 补丁不适用**：lj_susfs 的 rtmutex 修复是 BACKPORT 新版 API，
+   与 5.4.302 基线上下文不符 → 跳过（稳定性修复非安全）。
+   同理由：tcp `__user` annotation 补丁因 BBRv3 已改 tcp.h 而冲突 → 跳过（编译类修复非安全）。
+3. **nfc llcp 补丁编译验证**：Edge S30 变体内核 NFC 默认关闭（`NFC_QTI_I2C` 不编），
+   `net/nfc/llcp_core.o` 无构建规则属正常，不影响补丁有效性（NFC 开启时才会编入）。
+
+## 模块可选编译机制（workflow_dispatch 输入）
+- `ENABLE_SUSFS`（默认 true；false 回退 KSU_MANUAL_HOOK）
+- `ENABLE_REKERNEL`（默认 true）
+- `ENABLE_BBGUARD`（默认 true）
+- `ENABLE_BBRV3`（默认 true；false 回退 cubic）
+- `ENABLE_DROIDSPACES`（默认 true）
+
+实现：`build_resukisu_boot.sh` 在 defconfig 生成后、olddefconfig 前用
+`scripts/config --enable/--disable/--set-str` 按环境变量调整 `.config`。
+验证过 `ENABLE_SUSFS=false + ENABLE_REKERNEL=false`：最终 .config 正确切换
+`KSU_MANUAL_HOOK=y`（含 AUTO_* 子项）、`REKERNEL` 消失。
+
+## 谷歌安全补丁完整清单
+```
+net/packet/af_packet.c  fanout UAF (NETDEV_UP race)      [CVE-2024-36971 类]
+net/core/skbuff.c       shared-frag preserve x2 + zerocopy
+net/ipv6/icmp.c         ip6_err_gen_icmpv6_unreach cb[] clear
+net/ipv6/ip6_tunnel.c   ip4ip6_err cb[] clear
+net/tipc/msg.c          tipc_buf_append double-free
+net/nfc/llcp_core.c     missing return after LLCP_CLOSED
+```
