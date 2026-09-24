@@ -15,16 +15,13 @@
 ## 📱 项目简介
 
 摩托罗拉 **xpeng**（Edge S30 XT2175-2 / G200 5G XT2175-1）**5.4.302 内核**编译脚本仓库，
-内置 **ReSukiSU（KernelSU 分支）+ SUSFS v2.2.0** root 隐藏方案，并新增可选模块：
+内置 **ReSukiSU（KernelSU 分支）+ SUSFS v2.2.0** root 隐藏方案（稳定版）。
 
 | 模块 | 说明 |
 |------|------|
-| **Re:Kernel** | 进程/应用检测模块（binder + signal hooks，netlink 上报） |
-| **Baseband-guard（BBGuard）** | 基带防护 LSM（子模块 [vc-teahouse/Baseband-guard](https://github.com/vc-teahouse/Baseband-guard)） |
-| **BBRv3** | TCP 拥塞控制升级（默认启用 bbr，可选 cubic 回退） |
-| **DroidSpaces** | 沙箱/容器运行支持（IPC/PID 命名空间、DEVTMPFS、netfilter NAT/IP_SET、TMPFS xattr/acl） |
 | **SUSFS** | Secure User File System（SUS_PATH / SUS_MOUNT / SUS_KSTAT / SPOOF_UNAME / OPEN_REDIRECT / SUS_MAP 等全特性） |
-| **谷歌安全补丁** | 从 AOSP 上游移植的 CVE 修复（af_packet UAF、skbuff 共享 frag、ipv6 信息泄露、tipc 双重释放、nfc UAF） |
+
+> ⚠️ **回退记录 (2026-09-24)**: Re:Kernel / BBGuard / BBRv3 / DroidSpaces 模块分支因 BBRv3 无条件 TCP 改动导致卡机已全部回退。当前为**稳定的纯 SUSFS 版本**。
 
 ---
 
@@ -38,41 +35,6 @@
 - 编译仓库**不包含内核源码**，Actions 运行时自动 `git clone` 内核仓库指定分支。
 - 内核分支 `5.4.302-s3rxc32.33-8-25-modules` = 上游 8-25 + SUSFS 适配（b3ecce7eb）+ 模块扩展（8f74e34f6）。
 - 子模块：`KernelSU`→ReSukiSU @ `59c99fdf`（固定，SUSFS v2.2.0 兼容）、`Baseband-guard`→vc-teahouse @ `cef0daa`。
-
----
-
-## 🎛️ 编译时模块选项切换（重点）
-
-所有模块**默认全开**。触发编译时可在 Action 页面**取消勾选**来关闭，也可以本地用环境变量控制。
-
-### GitHub Actions 图形界面切换
-
-1. 打开仓库 → **Actions** 标签页
-2. 点击左侧 `build-resukisu-edge-s30.yml`（Edge S30）或 `build-resukisu-g200.yml`（G200）
-3. 点击 **Run workflow** 按钮
-4. 展开下拉框，按需勾选/取消以下选项：
-
-| 选项（输入框） | 默认 | 说明 |
-|----------------|------|------|
-| `enable_susfs` | ✅ 开 | SUSFS v2.2.0 隐藏框架；**关闭后自动回退到 `KSU_MANUAL_HOOK` 模式** |
-| `enable_rekernel` | ✅ 开 | Re:Kernel 进程/应用检测模块 |
-| `enable_bbguard` | ✅ 开 | Baseband-guard 基带防护 LSM |
-| `enable_bbrv3` | ✅ 开 | BBRv3 拥塞控制；关闭回退 `cubic` |
-| `enable_droidspaces` | ✅ 开 | DroidSpaces 沙箱配置（IPC/PID 命名空间等） |
-| `update_resukisu` | ❌ 关 | ⚠️ 更新 ReSukiSU 到最新 main（**需要 SUSFS v2.3+ 内核补丁，否则编译失败**，不建议开启） |
-
-### 本地编译环境变量
-
-```bash
-export ENABLE_SUSFS=true        # false → 关闭 SUSFS，回退 KSU_MANUAL_HOOK
-export ENABLE_REKERNEL=true     # false → 关闭 Re:Kernel
-export ENABLE_BBGUARD=true      # false → 关闭 Baseband-guard
-export ENABLE_BBRV3=true        # false → 关闭 BBRv3，回退 cubic
-export ENABLE_DROIDSPACES=true  # false → 关闭 DroidSpaces 配置
-export UPDATE_RESUKISU=false    # true → ReSukiSU 更新到 main（危险，见上）
-```
-
-> 开关实现方式：`build_resukisu_boot.sh` 在 defconfig 生成后用 `scripts/config --enable/--disable/--set-str` 调整 `.config`，再执行 `olddefconfig`。
 
 ---
 

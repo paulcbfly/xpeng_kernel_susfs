@@ -11,31 +11,6 @@ on:
         required: false
         default: false
         type: boolean
-      enable_susfs:
-        description: "Build with SUSFS (v2.2.0, ReSukiSU SUSFS inline hooks)"
-        required: false
-        default: true
-        type: boolean
-      enable_rekernel:
-        description: "Build with Re:Kernel (app/process detection module)"
-        required: false
-        default: true
-        type: boolean
-      enable_bbguard:
-        description: "Build with Baseband-guard (BBGuard telephony LSM)"
-        required: false
-        default: true
-        type: boolean
-      enable_bbrv3:
-        description: "Build with BBRv3 TCP congestion control"
-        required: false
-        default: true
-        type: boolean
-      enable_droidspaces:
-        description: "Build with DroidSpaces kernel configs (IPC/namespaces/netfilter/tmpfs)"
-        required: false
-        default: true
-        type: boolean
 
 permissions:
   contents: write
@@ -93,13 +68,8 @@ jobs:
           KERNEL_VER_LABEL: "5.4.302"
           ROM_ID: S3RXC32.33-8-25
           UPDATE_RESUKISU: ${{ inputs.update_resukisu || 'false' }}
-          ENABLE_SUSFS: ${{ inputs.enable_susfs || 'true' }}
-          ENABLE_REKERNEL: ${{ inputs.enable_rekernel || 'true' }}
-          ENABLE_BBGUARD: ${{ inputs.enable_bbguard || 'true' }}
-          ENABLE_BBRV3: ${{ inputs.enable_bbrv3 || 'true' }}
-          ENABLE_DROIDSPACES: ${{ inputs.enable_droidspaces || 'true' }}
           KERNEL_URL: https://github.com/paulcbfly/android_kernel_motorola_xpeng.git
-          KERNEL_BRANCH: 5.4.302-s3rxc32.33-8-25-modules-nosec
+          KERNEL_BRANCH: 5.4.302-s3rxc32.33-8-25-susfs
           CLANG_GIT_URL: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86
           GCC_GIT_URL: https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git
           GCC_GIT_BRANCH: lineage-19.1
@@ -135,7 +105,6 @@ jobs:
           body_path: .ci-work/edge-s30/release/RELEASE_NOTES.md
           files: |
             .ci-work/edge-s30/release/boot_ksu.img
-            .ci-work/edge-s30/release/boot_ksu*.img
             .ci-work/edge-s30/release/Image
             .ci-work/edge-s30/release/AnyKernel3-*.zip
             .ci-work/edge-s30/release/wlan_crc_match*-ksu-*.zip

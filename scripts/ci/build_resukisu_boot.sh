@@ -46,7 +46,7 @@ BUILD_WLAN="${BUILD_WLAN:-true}"
 WLAN_TAG="${WLAN_TAG:-MMI-S3RXC32.33-8-29}"
 
 KERNEL_URL="${KERNEL_URL:-https://github.com/paulcbfly/android_kernel_motorola_xpeng.git}"
-KERNEL_BRANCH="${KERNEL_BRANCH:-5.4.302-s3rxc32.33-8-25-modules-nosec}"
+KERNEL_BRANCH="${KERNEL_BRANCH:-5.4.302-s3rxc32.33-8-25-susfs}"
 KERNEL_DIR="${KERNEL_DIR:-${BUILD_ROOT}/.ci-src/android_kernel_motorola_xpeng}"
 
 case "${VARIANT}" in
@@ -93,14 +93,12 @@ gh_env() {
 }
 
 # Build module suffix tag from enabled ENABLE_* toggles.
-# e.g. all ON -> "-SUSFS-ReKernel-BBGuard-BBRv3-DroidSpaces", all OFF -> ""
+# e.g. SUSFS-only -> "-SUSFS", all off -> "".
+# (Re:Kernel / BBGuard / DroidSpaces / BBRv3 toggles were removed with the
+#  module branches; keep the hook so future modules can append their tag.)
 build_module_tag() {
   local tag=""
   [[ "${ENABLE_SUSFS:-true}" == "true" ]] && tag+="-SUSFS"
-  [[ "${ENABLE_REKERNEL:-true}" == "true" ]] && tag+="-ReKernel"
-  [[ "${ENABLE_BBGUARD:-true}" == "true" ]] && tag+="-BBGuard"
-  [[ "${ENABLE_BBRV3:-true}" == "true" ]] && tag+="-BBRv3"
-  [[ "${ENABLE_DROIDSPACES:-true}" == "true" ]] && tag+="-DroidSpaces"
   printf '%s' "${tag}"
 }
 
@@ -418,72 +416,6 @@ build_kernel() {
   else
     "${KERNEL_DIR}/scripts/config" --file "${OUT_DIR}/.config" --disable NFC_QTI_I2C || true
   fi
-
-  # ---- Optional kernel modules (all default ON, disable per-variant) ----
-  # SUSFS (Secure User File System, requires ReSukiSU KSU_SUSFS mode)
-  ENABLE_SUSFS="${ENABLE_SUSFS:-true}"
-  # Re:Kernel (process/app detection via binder/signal hooks)
-  ENABLE_REKERNEL="${ENABLE_REKERNEL:-true}"
-  # Baseband-guard (BBGuard telephony LSM)
-  ENABLE_BBGUARD="${ENABLE_BBGUARD:-true}"
-  # BBRv3 (TCP congestion control upgrade)
-  ENABLE_BBRV3="${ENABLE_BBRV3:-true}"
-  # DroidSpaces (IPC/namespaces/netfilter/tmpfs options)
-  ENABLE_DROIDSPACES="${ENABLE_DROIDSPACES:-true}"
-
-  local cfg="${OUT_DIR}/.config"
-  local kconfig_tool="${KERNEL_DIR}/scripts/config"
-
-  if [[ "${ENABLE_SUSFS}" == "true" ]]; then
-    "${kconfig_tool}" --file "${cfg}" --enable KSU_SUSFS || true
-  else
-    "${kconfig_tool}" --file "${cfg}" --disable KSU_SUSFS || true
-    "${kconfig_tool}" --file "${cfg}" --enable KSU_MANUAL_HOOK || true
-    info "SUSFS disabled -> fallback to KSU_MANUAL_HOOK"
-  fi
-
-  if [[ "${ENABLE_REKERNEL}" == "true" ]]; then
-    "${kconfig_tool}" --file "${cfg}" --enable REKERNEL || true
-  else
-    "${kconfig_tool}" --file "${cfg}" --disable REKERNEL || true
-  fi
-
-  if [[ "${ENABLE_BBGUARD}" == "true" ]]; then
-    "${kconfig_tool}" --file "${cfg}" --enable BBG || true
-    "${kconfig_tool}" --file "${cfg}" --set-str CONFIG_LSM "lockdown,yama,loadpin,safesetid,integrity,selinux,smack,tomoyo,apparmor,bpf,baseband_guard" || true
-  else
-    "${kconfig_tool}" --file "${cfg}" --disable BBG || true
-    # Restore MMI-baseline LSM list when Baseband-guard is off (avoid dangling
-    # "baseband_guard" name in CONFIG_LSM string).
-    "${kconfig_tool}" --file "${cfg}" --set-str CONFIG_LSM "lockdown,yama,loadpin,safesetid,integrity,selinux,smack,tomoyo,apparmor" || true
-  fi
-
-  if [[ "${ENABLE_BBRV3}" == "true" ]]; then
-    # BBRv3 upstream backport was REMOVED (unconditional tcp.h/tcp_rate.c changes
-    # broke the stock 5.4 TCP stack -> boot hang). Stock 5.4 BBR can still be
-    # selected here, but default stays cubic like the MMI baseline.
-    "${kconfig_tool}" --file "${cfg}" --enable TCP_CONG_BBR || true
-    "${kconfig_tool}" --file "${cfg}" --enable DEFAULT_BBR || true
-    "${kconfig_tool}" --file "${cfg}" --set-str DEFAULT_TCP_CONG bbr || true
-  else
-    "${kconfig_tool}" --file "${cfg}" --disable TCP_CONG_BBR || true
-    "${kconfig_tool}" --file "${cfg}" --disable DEFAULT_BBR || true
-    "${kconfig_tool}" --file "${cfg}" --set-str DEFAULT_TCP_CONG cubic || true
-  fi
-
-  if [[ "${ENABLE_DROIDSPACES}" == "true" ]]; then
-    "${kconfig_tool}" --file "${cfg}" --enable POSIX_MQUEUE || true
-    "${kconfig_tool}" --file "${cfg}" --enable IPC_NS || true
-    "${kconfig_tool}" --file "${cfg}" --enable PID_NS || true
-    "${kconfig_tool}" --file "${cfg}" --enable DEVTMPFS || true
-  else
-    "${kconfig_tool}" --file "${cfg}" --disable POSIX_MQUEUE || true
-    "${kconfig_tool}" --file "${cfg}" --disable IPC_NS || true
-    "${kconfig_tool}" --file "${cfg}" --disable PID_NS || true
-    "${kconfig_tool}" --file "${cfg}" --disable DEVTMPFS || true
-  fi
-  info "Module switches: SUSFS=${ENABLE_SUSFS} ReKernel=${ENABLE_REKERNEL} BBGuard=${ENABLE_BBGUARD} BBRv3=${ENABLE_BBRV3} DroidSpaces=${ENABLE_DROIDSPACES}"
-
   "${MAKE}" -j"${JOBS}" -C "${KERNEL_DIR}" O="${OUT_DIR}" \
     "${common_make[@]}" \
     HOSTCFLAGS="${hostcflags}" HOSTLDFLAGS="${hostldflags}" \
@@ -622,7 +554,7 @@ repack_boot() {
   cp -f new-boot.img "${WORK_DIR}/release/boot_ksu.img"
   cp -f new-boot.img "${WORK_DIR}/release/boot.img"
 
-  # boot_ksu + enabled modules (e.g. boot_ksu-SUSFS-ReKernel-BBGuard-BBRv3-DroidSpaces.img)
+  # boot_ksu + enabled modules (e.g. boot_ksu-SUSFS.img), per user-approved naming
   local module_tag
   module_tag="$(build_module_tag)"
   local out_name="boot_ksu${module_tag}.img"
@@ -715,10 +647,6 @@ pack_anykernel3() {
     WLAN_OUT_DIR="${WLAN_OUT_DIR:-${WORK_DIR}/wlan-kos}" \
     GITHUB_PROXY="${GITHUB_PROXY:-}" \
     ENABLE_SUSFS="${ENABLE_SUSFS:-true}" \
-    ENABLE_REKERNEL="${ENABLE_REKERNEL:-true}" \
-    ENABLE_BBGUARD="${ENABLE_BBGUARD:-true}" \
-    ENABLE_BBRV3="${ENABLE_BBRV3:-true}" \
-    ENABLE_DROIDSPACES="${ENABLE_DROIDSPACES:-true}" \
     KERNEL_IMAGE="${WORK_DIR}/release/Image" \
     bash "${pack_script}"
   endlog

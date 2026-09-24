@@ -5,43 +5,33 @@
 > **⚠️ IMPORTANT: This repository and its kernel-side SUSFS integration are 100% AI-GENERATED (100% 由 AI 生成).**
 > The build scripts are forked from [LuoJuly/android_kernel_motorola_xpeng_build](https://github.com/LuoJuly/android_kernel_motorola_xpeng_build); the SUSFS kernel adaptation was produced by an AI agent following [LuoJuly's reference commit](https://github.com/LuoJuly/android_kernel_motorola_sm7325/commit/2fa1be6d5a63d3958ab2babd56b61f561f74095b), then debugged and verified entirely through automated tooling. Use at your own risk.
 
-Build scripts for Motorola **xpeng** (Moto G200 5G / Edge S30) kernel + WLAN, plus **ReSukiSU + SUSFS + Re:Kernel + BBGuard + BBRv3 + DroidSpaces** boot / AnyKernel3 GitHub Actions.
+Build scripts for Motorola **xpeng** (Moto G200 5G / Edge S30) kernel + WLAN, plus **ReSukiSU + SUSFS** boot / AnyKernel3 GitHub Actions.
 
 > ⚠️ **AI 接管提示**: 接手前请先阅读 [`docs/AI_HANDOVER.md`](docs/AI_HANDOVER.md) —— 里面记录了本次适配遇到的**全部编译问题及解决方案**、GitHub Actions 编译流程、验证方法。下一个 AI 直接照此接管即可。**中文版请阅读 [`docs/AI_HANDOVER_zh.md`](docs/AI_HANDOVER_zh.md)。**
 
-> Fork of [`LuoJuly/android_kernel_motorola_xpeng_build`](https://github.com/LuoJuly/android_kernel_motorola_xpeng_build) with **SUSFS (v2.2.0)** and module additions, adapted from [LuoJuly/android_kernel_motorola_sm7325 branch `lineage-23.2-SUSFS`](https://github.com/LuoJuly/android_kernel_motorola_sm7325/tree/lineage-23.2-SUSFS) (same 5.4.302 kernel, MMI vs Lineage tree) for the MMI 5.4.302 tree.
+> Fork of [`LuoJuly/android_kernel_motorola_xpeng_build`](https://github.com/LuoJuly/android_kernel_motorola_xpeng_build) with **SUSFS (v2.2.0)**, adapted from [LuoJuly/android_kernel_motorola_sm7325 commit 2fa1be6](https://github.com/LuoJuly/android_kernel_motorola_sm7325/commit/2fa1be6d5a63d3958ab2babd56b61f561f74095b) for the MMI 5.4.302 tree.
 
 ## Active CI branch: `5.4.302-s3rxc32.33-8-25-ReSukiSU`
 
 | Item | Value |
 |------|-------|
-| Kernel source | [`android_kernel_motorola_xpeng` @ `5.4.302-s3rxc32.33-8-25-modules`](https://github.com/paulcbfly/android_kernel_motorola_xpeng/tree/5.4.302-s3rxc32.33-8-25-modules) |
+| Kernel source | [`android_kernel_motorola_xpeng` @ `5.4.302-s3rxc32.33-8-25-susfs`](https://github.com/paulcbfly/android_kernel_motorola_xpeng/tree/5.4.302-s3rxc32.33-8-25-susfs) |
 | Kernel version label | **5.4.302** |
 | ROM id | `S3RXC32.33-8-25` |
 | SUSFS | **v2.2.0** (all features: SUS_PATH / SUS_MOUNT / SUS_KSTAT / SPOOF_UNAME / HIDE_KSU_SUSFS_SYMBOLS / SPOOF_CMDLINE_OR_BOOTCONFIG / OPEN_REDIRECT / SUS_MAP / AVC-log-spoofing) |
 | ReSukiSU | pinned `59c99fdf` (v2.2.0-compatible, NOT auto-updated) |
-| Optional modules | **Re:Kernel** / **Baseband-guard (BBGuard)** / **BBRv3** / **DroidSpaces** — all toggleable at build time |
-| Security patches | Google/AOSP upstream fixes backported (af_packet UAF, skbuff frag, ipv6 cb, tipc, nfc) |
 | Legacy scripts branch | `S3RXC32.33-8-29-ReSukiSU` (8-29 kernel **5.4.210**, live WiFi pack) |
 
-Kernel sources are **not** in this repo. They are fetched by git from `paulcbfly/android_kernel_motorola_xpeng` (branch `5.4.302-s3rxc32.33-8-25-modules`), which carries the SUSFS + module integration commits on top of upstream `5.4.302-s3rxc32.33-8-25`.
+Kernel sources are **not** in this repo. They are fetched by git from `paulcbfly/android_kernel_motorola_xpeng` (branch `5.4.302-s3rxc32.33-8-25-susfs`), which carries the SUSFS integration commit on top of upstream `5.4.302-s3rxc32.33-8-25`.
 
-## Optional build-time modules (workflow_dispatch)
+> ⚠️ **回退记录 (2026-09-24)**: Re:Kernel / BBGuard / BBRv3 / DroidSpaces 模块分支因 BBRv3 无条件 TCP 改动导致卡机已全部回退。当前仅为**稳定的纯 SUSFS 版本**，与首个可用 Release (r2) 一致。模块开发请从 `5.4.302-s3rxc32.33-8-25-susfs` 分支重新开始，逐个模块验证后再合入。
 
-Every module is **enabled by default**; uncheck the box when triggering the workflow to disable:
+## Artifact naming
 
-| Input | Kconfig | Description / 说明 |
-|-------|---------|-------------|
-| `enable_susfs` | `KSU_SUSFS` | SUSFS v2.2.0 (off → falls back to `KSU_MANUAL_HOOK`) / SUSFS 隐藏框架（关闭则回退到手动 Hook 模式） |
-| `enable_rekernel` | `REKERNEL` | Re:Kernel process/app detection (binder+signal hooks) / 进程/应用检测模块 |
-| `enable_bbguard` | `BBG` | Baseband-guard telephony LSM (submodule `vc-teahouse/Baseband-guard`) / 基带防护 LSM |
-| `enable_bbrv3` | `TCP_CONG_BBR` / `DEFAULT_BBR` | BBRv3 congestion control (off → cubic) / BBRv3 网络拥塞控制（关闭回退 cubic） |
-| `enable_droidspaces` | IPC/NS/netfilter/tmpfs | DroidSpaces kernel configs (IPC/PID namespaces, DEVTMPFS, netfilter NAT/IP_SET, TMPFS xattr/ACL) / 沙箱/容器运行支持配置 |
+Artifacts are named by enabled modules (SUSFS branch = always `-SUSFS`):
 
-Same knobs available as env vars (`ENABLE_SUSFS=`, `ENABLE_REKERNEL=`, ...) for local builds.
-本地编译同样可用环境变量控制（`ENABLE_SUSFS=`、`ENABLE_REKERNEL=` 等）。
-
-> 🖱️ **Where to click / 在哪里切换**: GitHub 仓库页面 → **Actions** tab → 选择 `build-resukisu-edge-s30.yml` 或 `build-resukisu-g200.yml` → **Run workflow** → 展开下拉框即可看到以上所有选项开关。
+- `boot_ksu-SUSFS.img` (also kept as plain `boot_ksu.img`)
+- `AnyKernel3-xpeng-EdgeS30-5.4.302-SUSFS-ReSukiSU-r{N}.zip` (`r{N}` = Actions run number)
 
 ## Layout
 
