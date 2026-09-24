@@ -184,9 +184,20 @@ pack_zip() {
   RESUKISU_VERSION="${RESUKISU_VERSION:-$(cat "${WORK_DIR}/resukisu_version.txt" 2>/dev/null || echo unknown)}"
   RESUKISU_DISPLAY="${RESUKISU_DISPLAY:-$(cat "${WORK_DIR}/resukisu_display.txt" 2>/dev/null || echo "${RESUKISU_VERSION}@ReSukiSU")}"
   ROM_ID="${ROM_ID:-$(cat "${WORK_DIR}/rom_id.txt" 2>/dev/null || echo S3RXC32.33-8-25)}"
-  local safe_ver
-  safe_ver="$(echo "${RESUKISU_VERSION}" | tr '/:' '--')"
-  local zip_name="AnyKernel3-${VARIANT_SLUG}-ReSukiSU-${KERNEL_VER_LABEL}-${safe_ver}-${ROM_ID}.zip"
+
+  # Module suffix tag: mirrors build_module_tag() in build_resukisu_boot.sh
+  local module_tag build_num
+  module_tag=""
+  [[ "${ENABLE_SUSFS:-true}" == "true" ]] && module_tag+="-SUSFS"
+  [[ "${ENABLE_REKERNEL:-true}" == "true" ]] && module_tag+="-ReKernel"
+  [[ "${ENABLE_BBGUARD:-true}" == "true" ]] && module_tag+="-BBGuard"
+  [[ "${ENABLE_BBRV3:-true}" == "true" ]] && module_tag+="-BBRv3"
+  [[ "${ENABLE_DROIDSPACES:-true}" == "true" ]] && module_tag+="-DroidSpaces"
+  build_num="${BUILD_NUM:-r${GITHUB_RUN_NUMBER:-$(date -u +%Y%m%d%H%M%S)}}"
+
+  # AnyKernel3-{device}-{variant}-{kver}{modules}-ReSukiSU-{build}
+  # e.g. AnyKernel3-xpeng-EdgeS30-5.4.302-SUSFS-ReKernel-BBGuard-BBRv3-DroidSpaces-ReSukiSU-r4.zip
+  local zip_name="AnyKernel3-${VARIANT_SLUG}-${KERNEL_VER_LABEL}${module_tag}-ReSukiSU-${build_num}.zip"
   local zip_path="${WORK_DIR}/release/${zip_name}"
 
   rm -f "${zip_path}"

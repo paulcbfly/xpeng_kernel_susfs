@@ -92,6 +92,18 @@ gh_env() {
   fi
 }
 
+# Build module suffix tag from enabled ENABLE_* toggles.
+# e.g. all ON -> "-SUSFS-ReKernel-BBGuard-BBRv3-DroidSpaces", all OFF -> ""
+build_module_tag() {
+  local tag=""
+  [[ "${ENABLE_SUSFS:-true}" == "true" ]] && tag+="-SUSFS"
+  [[ "${ENABLE_REKERNEL:-true}" == "true" ]] && tag+="-ReKernel"
+  [[ "${ENABLE_BBGUARD:-true}" == "true" ]] && tag+="-BBGuard"
+  [[ "${ENABLE_BBRV3:-true}" == "true" ]] && tag+="-BBRv3"
+  [[ "${ENABLE_DROIDSPACES:-true}" == "true" ]] && tag+="-DroidSpaces"
+  printf '%s' "${tag}"
+}
+
 # ---------------------------------------------------------------------------
 # 1) Fetch kernel sources (git only; not uploaded in this repo)
 # ---------------------------------------------------------------------------
@@ -603,7 +615,10 @@ repack_boot() {
   cp -f new-boot.img "${WORK_DIR}/release/boot_ksu.img"
   cp -f new-boot.img "${WORK_DIR}/release/boot.img"
 
-  local out_name="boot_ksu-${VARIANT_SLUG}-ReSukiSU-${safe_ver}-${ROM_ID}.img"
+  # boot_ksu + enabled modules (e.g. boot_ksu-SUSFS-ReKernel-BBGuard-BBRv3-DroidSpaces.img)
+  local module_tag
+  module_tag="$(build_module_tag)"
+  local out_name="boot_ksu${module_tag}.img"
   cp -f new-boot.img "${WORK_DIR}/release/${out_name}"
 
   popd >/dev/null
@@ -692,6 +707,11 @@ pack_anykernel3() {
     KERNEL_VER_LABEL="${KERNEL_VER_LABEL}" \
     WLAN_OUT_DIR="${WLAN_OUT_DIR:-${WORK_DIR}/wlan-kos}" \
     GITHUB_PROXY="${GITHUB_PROXY:-}" \
+    ENABLE_SUSFS="${ENABLE_SUSFS:-true}" \
+    ENABLE_REKERNEL="${ENABLE_REKERNEL:-true}" \
+    ENABLE_BBGUARD="${ENABLE_BBGUARD:-true}" \
+    ENABLE_BBRV3="${ENABLE_BBRV3:-true}" \
+    ENABLE_DROIDSPACES="${ENABLE_DROIDSPACES:-true}" \
     KERNEL_IMAGE="${WORK_DIR}/release/Image" \
     bash "${pack_script}"
   endlog
