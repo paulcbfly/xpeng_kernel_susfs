@@ -250,13 +250,11 @@ export KERNEL_BRANCH=5.4.302-s3rxc32.33-8-25-susfs-modules
 
 ## 7. 未来升级路径
 
-### 升级 SUSFS v2.3.0 / 最新 ReSukiSU
+### 升级 SUSFS v2.3.0 / 最新 ReSukiSU — 在 xpeng 5.4.302 上已放弃
 
-1. 内核侧：用 `cctv18/susfs4oki`（v2.3.0）替换 `fs/susfs.c`、`include/linux/susfs.h`、`include/linux/susfs_def.h`；
-   **注意 AS_FLAGS 从 `inode->i_state` → `inode->i_mapping->flags`**，所有 hook 文件里的 set_bit/test_bit 都要同步改；
-   v2.3.0 新增 `fs/super.c` hook，5.4 需手动移植。
-2. 放开 `UPDATE_RESUKISU`（改回 schedule 强制或默认 true）。
-3. 升级后本地先验证编译通过再推送。
+已尝试移植 v2.3：用 `bcrtvkcs/susfs4ksu@gki-android16-5.4` 的参考文件替换 `fs/susfs.c`、`include/linux/susfs.h`、`include/linux/susfs_def.h`，并对树里残留的 v2.2 hook 加兼容 stub。编译通过，但刷入 Edge S30 后**卡第一屏反复重启**。在没有串口的情况下无法确认是新 AS_FLAGS 路径隐藏逻辑的问题，还是 ReSukiSU latest 期望了 5.4 参考未提供的 API。
+
+**结论**：xpeng 5.4.302 不再支持 SUSFS v2.3。保持 SUSFS v2.2 + 已验证可开机的 pinned ReSukiSU。workflow 中不再提供 `susfs_version: 2.3` 选项。
 
 ### 新增模块
 

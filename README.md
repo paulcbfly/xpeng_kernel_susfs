@@ -119,7 +119,7 @@ Monthly schedule: UTC 00:00 1st (Edge S30), 02:00 1st (G200), all modules ON by 
 ```bash
 export VARIANT=edge-s30      # or g200 (ENABLE_NFC=true)
 export ENABLE_NFC=false
-export SUSFS_VERSION=2.2     # 2.2 = stable, 2.3 = latest SUSFS (requires matching kernel branch)
+# Only SUSFS v2.2 is supported on xpeng 5.4.302; v2.3 port was attempted and abandoned (bootloop).
 export RESUKISU_VERSION=pinned # pinned | latest | custom
 # export RESUKISU_CUSTOM_REF=<commit/branch/tag>  # only when RESUKISU_VERSION=custom
 export KERNEL_URL=https://github.com/paulcbfly/android_kernel_motorola_xpeng.git

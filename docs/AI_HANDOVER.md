@@ -249,13 +249,11 @@ export KERNEL_BRANCH=5.4.302-s3rxc32.33-8-25-susfs-modules
 
 ## 7. Future upgrade paths
 
-### Upgrade SUSFS v2.3.0 / latest ReSukiSU
+### SUSFS v2.3.0 / latest ReSukiSU — ABANDONED on xpeng 5.4.302
 
-1. Kernel side: replace `fs/susfs.c`, `include/linux/susfs.h`, `include/linux/susfs_def.h` with `cctv18/susfs4oki` (v2.3.0);
-   **note AS_FLAGS moved from `inode->i_state` → `inode->i_mapping->flags`**, so update all set_bit/test_bit in hook files;
-   v2.3.0 adds `fs/super.c` hook, needs manual 5.4 port.
-2. Release `UPDATE_RESUKISU` lock (set schedule/default to true).
-3. Verify locally before pushing.
+A v2.3 port was attempted by replacing `fs/susfs.c`, `include/linux/susfs.h`, `include/linux/susfs_def.h` with the `bcrtvkcs/susfs4ksu@gki-android16-5.4` reference and adding backward-compat stubs for the v2.2 hooks still present in the tree. The build succeeded, but the resulting image **boot-loops at the first screen** on Edge S30. Without a serial console it is impossible to determine whether the failure is the new AS_FLAGS path-hiding logic or ReSukiSU latest expecting APIs the 5.4 reference does not provide.
+
+**Decision**: drop SUSFS v2.3 for xpeng 5.4.302. Stay on SUSFS v2.2 + the pinned ReSukiSU commit that is known to boot. Do not expose a `susfs_version: 2.3` workflow choice.
 
 ### Add new modules
 

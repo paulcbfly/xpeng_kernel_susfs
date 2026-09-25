@@ -119,7 +119,7 @@ gh run list --workflow build-resukisu-edge-s30.yml --limit 3
 ```bash
 export VARIANT=edge-s30      # 或 g200（ENABLE_NFC=true）
 export ENABLE_NFC=false
-export SUSFS_VERSION=2.2     # 2.2 = 稳定, 2.3 = 最新 SUSFS（需对应内核分支）
+# xpeng 5.4.302 仅支持 SUSFS v2.2；v2.3 移植已尝试并放弃（卡开机）。
 export RESUKISU_VERSION=pinned # pinned | latest | custom
 # export RESUKISU_CUSTOM_REF=<commit/branch/tag>  # 仅当 RESUKISU_VERSION=custom 时使用
 export KERNEL_URL=https://github.com/paulcbfly/android_kernel_motorola_xpeng.git

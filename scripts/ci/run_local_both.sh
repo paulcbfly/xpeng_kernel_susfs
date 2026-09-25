@@ -12,8 +12,8 @@ chmod +x scripts/ci/build_resukisu_boot.sh \
 chmod +x scripts/ci/host-bin/* 2>/dev/null || true
 
 export XPENG_BUILD_ROOT="${XPENG_BUILD_ROOT:-${BUILD_ROOT}}"
-export SUSFS_VERSION="${SUSFS_VERSION:-2.2}"
-export RESUKISU_VERSION="${RESUKISU_VERSION:-latest}"
+# SUSFS v2.3 abandoned on xpeng 5.4.302 (bootloop). v2.2 pinned ReSukiSU is the stable default.
+export RESUKISU_VERSION="${RESUKISU_VERSION:-pinned}"
 export RESUKISU_CUSTOM_REF="${RESUKISU_CUSTOM_REF:-}"
 export BOOT_OEM_IMG="${BOOT_OEM_IMG:-${BUILD_ROOT}/prebuilt/boot_oem.img}"
 export KERNEL_URL="${KERNEL_URL:-https://github.com/LuoJuly/android_kernel_motorola_xpeng.git}"
@@ -39,7 +39,6 @@ fi
 
 echo "======== Edge S30 (XT2175-2, NFC off, kernel ${KERNEL_VER_LABEL}) ========"
 VARIANT=edge-s30 \
-  SUSFS_VERSION="${SUSFS_VERSION}" \
   RESUKISU_VERSION="${RESUKISU_VERSION}" \
   RESUKISU_CUSTOM_REF="${RESUKISU_CUSTOM_REF}" \
   XPENG_BUILD_ROOT="${XPENG_BUILD_ROOT}" \
@@ -50,7 +49,6 @@ VARIANT=edge-s30 \
 echo "======== G200 (XT2175-1, NFC on, kernel ${KERNEL_VER_LABEL}) ========"
 # ReSukiSU already updated/checked out in the first build
 VARIANT=g200 \
-  SUSFS_VERSION="${SUSFS_VERSION}" \
   RESUKISU_VERSION="${RESUKISU_VERSION}" \
   RESUKISU_CUSTOM_REF="${RESUKISU_CUSTOM_REF}" \
   XPENG_BUILD_ROOT="${XPENG_BUILD_ROOT}" \

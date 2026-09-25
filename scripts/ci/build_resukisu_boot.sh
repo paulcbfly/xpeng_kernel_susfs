@@ -46,15 +46,8 @@ BUILD_WLAN="${BUILD_WLAN:-true}"
 WLAN_TAG="${WLAN_TAG:-MMI-S3RXC32.33-8-29}"
 
 KERNEL_URL="${KERNEL_URL:-https://github.com/paulcbfly/android_kernel_motorola_xpeng.git}"
-SUSFS_VERSION="${SUSFS_VERSION:-2.2}"
-# SUSFS 2.3 uses a separate kernel branch; workflow override takes precedence.
-if [[ -z "${KERNEL_BRANCH:-}" ]]; then
-  if [[ "${SUSFS_VERSION}" == "2.3" ]]; then
-    KERNEL_BRANCH="5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3"
-  else
-    KERNEL_BRANCH="5.4.302-s3rxc32.33-8-25-susfs-modules"
-  fi
-fi
+# Only SUSFS v2.2 is supported; v2.3 was attempted and abandoned due to bootloop.
+KERNEL_BRANCH="${KERNEL_BRANCH:-5.4.302-s3rxc32.33-8-25-susfs-modules}"
 KERNEL_DIR="${KERNEL_DIR:-${BUILD_ROOT}/.ci-src/android_kernel_motorola_xpeng}"
 
 case "${VARIANT}" in
@@ -168,19 +161,13 @@ update_resukisu() {
     git submodule update --init --recursive KernelSU
   fi
 
-  # ReSukiSU origin/main tracks simonpunk's latest SUSFS (v2.3+). It is NOT
-  # compatible with the kernel-side SUSFS v2.2.0 integration.
-  # Default: pin to the v2.2.0-compatible commit recorded in this fork's gitlink.
+  # xpeng 5.4.302 only supports SUSFS v2.2. The pinned ReSukiSU commit below is
+  # the known-good version that boots with the v2.2.0 kernel-side integration.
+  # "latest" / origin/main is NOT supported because it expects SUSFS v2.3+ APIs.
   local resukisu_mode="${RESUKISU_VERSION:-pinned}"
   RE_SUKISU_PIN="${RE_SUKISU_PIN:-59c99fdf1735c37681ff18c7ffd7834741dcccbf}"
 
   case "${resukisu_mode}" in
-    latest)
-      git -C KernelSU fetch --unshallow origin 2>/dev/null || true
-      git -C KernelSU fetch origin main --tags --force
-      git -C KernelSU checkout -f origin/main
-      info "ReSukiSU updated to origin/main (requires SUSFS v2.3+ kernel patches)"
-      ;;
     custom)
       local ref="${RESUKISU_CUSTOM_REF:-${RE_SUKISU_PIN}}"
       git -C KernelSU fetch origin "${ref}" --tags --force 2>/dev/null || true
@@ -188,6 +175,9 @@ update_resukisu() {
         || git -C KernelSU checkout -f FETCH_HEAD 2>/dev/null || true
       info "ReSukiSU checked out custom ref ${ref}"
       ;;
+    latest)
+      info "WARN: RESUKISU_VERSION=latest is disabled on xpeng 5.4.302; forcing pinned commit"
+      ;&
     pinned|*)
       git -C KernelSU checkout -f "${RE_SUKISU_PIN}" 2>/dev/null \
         || git -C KernelSU checkout -f FETCH_HEAD 2>/dev/null || true
