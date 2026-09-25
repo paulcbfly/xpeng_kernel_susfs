@@ -6,18 +6,35 @@ on:
     - cron: "0 0 1 * *"
   workflow_dispatch:
     inputs:
-      update_resukisu:
-        description: "Update ReSukiSU submodule to latest main (WARNING: requires SUSFS v2.3+ kernel patches)"
+      susfs_version:
+        description: "SUSFS kernel-side version (2.2 = stable, 2.3 = latest features, requires matching ReSukiSU)"
         required: false
-        default: false
-        type: boolean
+        default: "2.2"
+        type: choice
+        options:
+          - "2.2"
+          - "2.3"
+      resukisu_version:
+        description: "ReSukiSU version to build"
+        required: false
+        default: "pinned"
+        type: choice
+        options:
+          - "pinned"
+          - "latest"
+          - "custom"
+      resukisu_custom_ref:
+        description: "Custom ReSukiSU ref (commit/branch/tag). Only used when resukisu_version = custom"
+        required: false
+        default: ""
+        type: string
       enable_rekernel:
         description: "Re:Kernel v8.5 (process/app detection via binder+signal hooks)"
         required: false
         default: true
         type: boolean
       enable_droidspaces:
-        description: "DroidSpaces kernel configs (IPC/PID namespaces, netfilter/IP_SET, tmpfs ACL)"
+        description: "DroidSpaces kernel configs (IPC/PID/USER namespaces, netfilter/IP_SET, tmpfs ACL)"
         required: false
         default: true
         type: boolean
@@ -87,7 +104,11 @@ jobs:
           BUILD_WLAN: "true"
           KERNEL_VER_LABEL: "5.4.302"
           ROM_ID: S3RXC32.33-8-25
-          UPDATE_RESUKISU: ${{ inputs.update_resukisu || 'false' }}
+          # SUSFS/ReSukiSU version selection.
+          # For scheduled runs these empty values fall back to the script defaults.
+          SUSFS_VERSION: ${{ inputs.susfs_version }}
+          RESUKISU_VERSION: ${{ inputs.resukisu_version }}
+          RESUKISU_CUSTOM_REF: ${{ inputs.resukisu_custom_ref }}
           # Module toggles. NOTE: do NOT append `|| 'true'` — in GitHub expressions
           # `false || 'true'` yields 'true', which would force every module ON and
           # silently ignore the user's checkbox. Passing the raw value keeps
@@ -98,7 +119,7 @@ jobs:
           ENABLE_BBGUARD: ${{ inputs.enable_bbguard }}
           ENABLE_BBRV3: ${{ inputs.enable_bbrv3 }}
           KERNEL_URL: https://github.com/paulcbfly/android_kernel_motorola_xpeng.git
-          KERNEL_BRANCH: 5.4.302-s3rxc32.33-8-25-susfs-modules
+          KERNEL_BRANCH: ${{ inputs.susfs_version == '2.3' && '5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3' || '5.4.302-s3rxc32.33-8-25-susfs-modules' }}
           CLANG_GIT_URL: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86
           GCC_GIT_URL: https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git
           GCC_GIT_BRANCH: lineage-19.1

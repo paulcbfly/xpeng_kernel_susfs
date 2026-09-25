@@ -114,12 +114,14 @@ Monthly schedule: UTC 00:00 1st (Edge S30), 02:00 1st (G200), all modules ON by 
 
 ---
 
-## Local build (verified on WSL2 Ubuntu-22.04)
+## Local build (verified on Linux container/VM)
 
 ```bash
 export VARIANT=edge-s30      # or g200 (ENABLE_NFC=true)
 export ENABLE_NFC=false
-export UPDATE_RESUKISU=false
+export SUSFS_VERSION=2.2     # 2.2 = stable, 2.3 = latest SUSFS (requires matching kernel branch)
+export RESUKISU_VERSION=pinned # pinned | latest | custom
+# export RESUKISU_CUSTOM_REF=<commit/branch/tag>  # only when RESUKISU_VERSION=custom
 export KERNEL_URL=https://github.com/paulcbfly/android_kernel_motorola_xpeng.git
 export KERNEL_BRANCH=5.4.302-s3rxc32.33-8-25-susfs-modules
 ./scripts/ci/build_resukisu_boot.sh

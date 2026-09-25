@@ -46,7 +46,15 @@ BUILD_WLAN="${BUILD_WLAN:-true}"
 WLAN_TAG="${WLAN_TAG:-MMI-S3RXC32.33-8-29}"
 
 KERNEL_URL="${KERNEL_URL:-https://github.com/paulcbfly/android_kernel_motorola_xpeng.git}"
-KERNEL_BRANCH="${KERNEL_BRANCH:-5.4.302-s3rxc32.33-8-25-susfs-modules}"
+SUSFS_VERSION="${SUSFS_VERSION:-2.2}"
+# SUSFS 2.3 uses a separate kernel branch; workflow override takes precedence.
+if [[ -z "${KERNEL_BRANCH:-}" ]]; then
+  if [[ "${SUSFS_VERSION}" == "2.3" ]]; then
+    KERNEL_BRANCH="5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3"
+  else
+    KERNEL_BRANCH="5.4.302-s3rxc32.33-8-25-susfs-modules"
+  fi
+fi
 KERNEL_DIR="${KERNEL_DIR:-${BUILD_ROOT}/.ci-src/android_kernel_motorola_xpeng}"
 
 case "${VARIANT}" in
@@ -160,20 +168,32 @@ update_resukisu() {
     git submodule update --init --recursive KernelSU
   fi
 
-  # ReSukiSU origin/main tracks simonpunk's latest susfs (v2.3+) which is NOT
-  # compatible with the kernel-side SUSFS v2.2.0 integration in this branch.
+  # ReSukiSU origin/main tracks simonpunk's latest SUSFS (v2.3+). It is NOT
+  # compatible with the kernel-side SUSFS v2.2.0 integration.
   # Default: pin to the v2.2.0-compatible commit recorded in this fork's gitlink.
+  local resukisu_mode="${RESUKISU_VERSION:-pinned}"
   RE_SUKISU_PIN="${RE_SUKISU_PIN:-59c99fdf1735c37681ff18c7ffd7834741dcccbf}"
-  if [[ "${UPDATE_RESUKISU:-false}" == "true" ]]; then
-    git -C KernelSU fetch --unshallow origin 2>/dev/null || true
-    git -C KernelSU fetch origin main --tags --force
-    git -C KernelSU checkout -f origin/main
-    info "ReSukiSU updated to origin/main (NOTE: latest main requires SUSFS v2.3+ kernel patches; build may fail)"
-  else
-    git -C KernelSU checkout -f "${RE_SUKISU_PIN}" 2>/dev/null \
-      || git -C KernelSU checkout -f FETCH_HEAD 2>/dev/null || true
-    info "ReSukiSU pinned to ${RE_SUKISU_PIN} (SUSFS v2.2.0 compatible; UPDATE_RESUKISU=false)"
-  fi
+
+  case "${resukisu_mode}" in
+    latest)
+      git -C KernelSU fetch --unshallow origin 2>/dev/null || true
+      git -C KernelSU fetch origin main --tags --force
+      git -C KernelSU checkout -f origin/main
+      info "ReSukiSU updated to origin/main (requires SUSFS v2.3+ kernel patches)"
+      ;;
+    custom)
+      local ref="${RESUKISU_CUSTOM_REF:-${RE_SUKISU_PIN}}"
+      git -C KernelSU fetch origin "${ref}" --tags --force 2>/dev/null || true
+      git -C KernelSU checkout -f "${ref}" 2>/dev/null \
+        || git -C KernelSU checkout -f FETCH_HEAD 2>/dev/null || true
+      info "ReSukiSU checked out custom ref ${ref}"
+      ;;
+    pinned|*)
+      git -C KernelSU checkout -f "${RE_SUKISU_PIN}" 2>/dev/null \
+        || git -C KernelSU checkout -f FETCH_HEAD 2>/dev/null || true
+      info "ReSukiSU pinned to ${RE_SUKISU_PIN} (SUSFS v2.2.0 compatible)"
+      ;;
+  esac
 
   RESUKISU_VERSION="$(git -C KernelSU describe --tags --always)"
   RESUKISU_SHA="$(git -C KernelSU rev-parse --short=8 HEAD)"
@@ -437,7 +457,7 @@ build_kernel() {
   fi
 
   if [[ "${ENABLE_DROIDSPACES}" == "true" ]]; then
-    for sym in POSIX_MQUEUE IPC_NS PID_NS DEVTMPFS \
+    for sym in POSIX_MQUEUE IPC_NS PID_NS USER_NS DEVTMPFS \
                NETFILTER_XT_MATCH_ADDRTYPE IP_NF_TARGET_REJECT NETFILTER_XT_TARGET_LOG \
                NETFILTER_XT_MATCH_RECENT IP_SET IP_SET_HASH_IP IP_SET_HASH_NET NETFILTER_XT_SET \
                TMPFS_POSIX_ACL TMPFS_XATTR; do
@@ -473,6 +493,20 @@ build_kernel() {
     "${kc}" --file "${cfg}" --disable DEFAULT_BBR || true
     "${kc}" --file "${cfg}" --disable NET_SCH_DEFAULT || true
     "${kc}" --file "${cfg}" --disable DEFAULT_FQ || true
+  fi
+
+  # Inject enabled optional modules into the ReSukiSU manager home-page version string.
+  # The manager reads KSU_VERSION_FULL via the UAPI ioctl KSU_IOCTL_GET_FULL_VERSION,
+  # which is built at compile time from CONFIG_KSU_FULL_NAME_FORMAT.
+  local ksu_format_suffix=""
+  [[ "${ENABLE_REKERNEL}" == "true" ]]    && ksu_format_suffix+="+ReKernel"
+  [[ "${ENABLE_DROIDSPACES}" == "true" ]] && ksu_format_suffix+="+DroidSpaces"
+  [[ "${ENABLE_BBGUARD}" == "true" ]]     && ksu_format_suffix+="+BBGuard"
+  [[ "${ENABLE_BBRV3}" == "true" ]]       && ksu_format_suffix+="+BBRv3"
+  local ksu_format="%TAG_NAME%-%COMMIT_SHA%@%REPO_NAME%${ksu_format_suffix}"
+  if grep -q '^CONFIG_KSU_FULL_NAME_FORMAT=' "${cfg}" 2>/dev/null; then
+    "${kc}" --file "${cfg}" --set-str CONFIG_KSU_FULL_NAME_FORMAT "${ksu_format}" || true
+    info "ReSukiSU version format set to: ${ksu_format}"
   fi
 
   info "Module switches: ReKernel=${ENABLE_REKERNEL} DroidSpaces=${ENABLE_DROIDSPACES} BBGuard=${ENABLE_BBGUARD} BBRv3=${ENABLE_BBRV3}"

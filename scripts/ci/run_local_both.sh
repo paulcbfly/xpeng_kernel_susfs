@@ -12,7 +12,9 @@ chmod +x scripts/ci/build_resukisu_boot.sh \
 chmod +x scripts/ci/host-bin/* 2>/dev/null || true
 
 export XPENG_BUILD_ROOT="${XPENG_BUILD_ROOT:-${BUILD_ROOT}}"
-export UPDATE_RESUKISU="${UPDATE_RESUKISU:-true}"
+export SUSFS_VERSION="${SUSFS_VERSION:-2.2}"
+export RESUKISU_VERSION="${RESUKISU_VERSION:-latest}"
+export RESUKISU_CUSTOM_REF="${RESUKISU_CUSTOM_REF:-}"
 export BOOT_OEM_IMG="${BOOT_OEM_IMG:-${BUILD_ROOT}/prebuilt/boot_oem.img}"
 export KERNEL_URL="${KERNEL_URL:-https://github.com/LuoJuly/android_kernel_motorola_xpeng.git}"
 export KERNEL_BRANCH="${KERNEL_BRANCH:-5.4.302-s3rxc32.33-8-25}"
@@ -36,15 +38,21 @@ elif [[ -z "${KERNEL_SRC:-}" && -d "${HOME}/android/kernel-msm-MMI-S3RXC32.33-8-
 fi
 
 echo "======== Edge S30 (XT2175-2, NFC off, kernel ${KERNEL_VER_LABEL}) ========"
-VARIANT=edge-s30 UPDATE_RESUKISU="${UPDATE_RESUKISU}" \
+VARIANT=edge-s30 \
+  SUSFS_VERSION="${SUSFS_VERSION}" \
+  RESUKISU_VERSION="${RESUKISU_VERSION}" \
+  RESUKISU_CUSTOM_REF="${RESUKISU_CUSTOM_REF}" \
   XPENG_BUILD_ROOT="${XPENG_BUILD_ROOT}" \
   BOOT_OEM_IMG="${BOOT_OEM_IMG}" \
   KERNEL_SRC="${KERNEL_SRC:-}" \
   scripts/ci/build_resukisu_boot.sh
 
 echo "======== G200 (XT2175-1, NFC on, kernel ${KERNEL_VER_LABEL}) ========"
-# ReSukiSU already updated in the first build
-VARIANT=g200 UPDATE_RESUKISU=false \
+# ReSukiSU already updated/checked out in the first build
+VARIANT=g200 \
+  SUSFS_VERSION="${SUSFS_VERSION}" \
+  RESUKISU_VERSION="${RESUKISU_VERSION}" \
+  RESUKISU_CUSTOM_REF="${RESUKISU_CUSTOM_REF}" \
   XPENG_BUILD_ROOT="${XPENG_BUILD_ROOT}" \
   BOOT_OEM_IMG="${BOOT_OEM_IMG}" \
   KERNEL_SRC="${KERNEL_SRC:-}" \
