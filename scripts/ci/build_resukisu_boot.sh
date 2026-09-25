@@ -485,27 +485,6 @@ build_kernel() {
     "${kc}" --file "${cfg}" --disable DEFAULT_FQ || true
   fi
 
-  # Inject optional module support status into the ReSukiSU manager home-page
-  # version string. The manager reads KSU_VERSION_FULL via the UAPI ioctl
-  # KSU_IOCTL_GET_FULL_VERSION, which is built at compile time from
-  # CONFIG_KSU_FULL_NAME_FORMAT. Show every module as [Y] supported or [N] not
-  # supported so users can tell at a glance which features this build carries.
-  module_status() { [[ "${1}" == "true" ]] && echo "[Y]" || echo "[N]"; }
-  local ksu_format_suffix=""
-  ksu_format_suffix+="+ReKernel$(module_status ${ENABLE_REKERNEL})"
-  ksu_format_suffix+="+DroidSpaces$(module_status ${ENABLE_DROIDSPACES})"
-  ksu_format_suffix+="+BBGuard$(module_status ${ENABLE_BBGUARD})"
-  ksu_format_suffix+="+BBRv3$(module_status ${ENABLE_BBRV3})"
-  local ksu_format="%TAG_NAME%-%COMMIT_SHA%@%REPO_NAME%${ksu_format_suffix}"
-  if grep -q '^CONFIG_KSU_FULL_NAME_FORMAT=' "${cfg}" 2>/dev/null; then
-    "${kc}" --file "${cfg}" --set-str CONFIG_KSU_FULL_NAME_FORMAT "${ksu_format}" || true
-    info "ReSukiSU manager version format set to: ${ksu_format}"
-  fi
-
-  # Also expose a compact module-status string for release notes / AK3 prints.
-  MODULE_STATUS="ReKernel$(module_status ${ENABLE_REKERNEL}) DroidSpaces$(module_status ${ENABLE_DROIDSPACES}) BBGuard$(module_status ${ENABLE_BBGUARD}) BBRv3$(module_status ${ENABLE_BBRV3})"
-  gh_env MODULE_STATUS "${MODULE_STATUS}"
-  export MODULE_STATUS
   info "Module switches: ReKernel=${ENABLE_REKERNEL} DroidSpaces=${ENABLE_DROIDSPACES} BBGuard=${ENABLE_BBGUARD} BBRv3=${ENABLE_BBRV3}"
 
   "${MAKE}" -j"${JOBS}" -C "${KERNEL_DIR}" O="${OUT_DIR}" \
