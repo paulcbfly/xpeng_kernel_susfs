@@ -46,7 +46,7 @@ BUILD_WLAN="${BUILD_WLAN:-true}"
 WLAN_TAG="${WLAN_TAG:-MMI-S3RXC32.33-8-29}"
 
 KERNEL_URL="${KERNEL_URL:-https://github.com/paulcbfly/android_kernel_motorola_xpeng.git}"
-KERNEL_BRANCH="${KERNEL_BRANCH:-5.4.302-s3rxc32.33-8-25-susfs}"
+KERNEL_BRANCH="${KERNEL_BRANCH:-5.4.302-s3rxc32.33-8-25-susfs-modules}"
 KERNEL_DIR="${KERNEL_DIR:-${BUILD_ROOT}/.ci-src/android_kernel_motorola_xpeng}"
 
 case "${VARIANT}" in
@@ -92,13 +92,15 @@ gh_env() {
   fi
 }
 
-# Build module suffix tag from enabled ENABLE_* toggles.
-# e.g. SUSFS-only -> "-SUSFS", all off -> "".
-# (Re:Kernel / BBGuard / DroidSpaces / BBRv3 toggles were removed with the
-#  module branches; keep the hook so future modules can append their tag.)
+# Build module suffix tag from enabled optional-module toggles.
+# e.g. all on -> "-ReKernel-DroidSpaces-BBGuard-BBRv3", all off -> "".
+# SUSFS is core (always on) and is not part of the tag.
 build_module_tag() {
   local tag=""
-  [[ "${ENABLE_SUSFS:-true}" == "true" ]] && tag+="-SUSFS"
+  [[ "${ENABLE_REKERNEL:-true}" == "true" ]] && tag+="-ReKernel"
+  [[ "${ENABLE_DROIDSPACES:-true}" == "true" ]] && tag+="-DroidSpaces"
+  [[ "${ENABLE_BBGUARD:-true}" == "true" ]] && tag+="-BBGuard"
+  [[ "${ENABLE_BBRV3:-true}" == "true" ]] && tag+="-BBRv3"
   printf '%s' "${tag}"
 }
 
@@ -416,6 +418,65 @@ build_kernel() {
   else
     "${KERNEL_DIR}/scripts/config" --file "${OUT_DIR}/.config" --disable NFC_QTI_I2C || true
   fi
+
+  # ---- Optional kernel modules (workflow_dispatch toggles) ----
+  # The kernel branch (susfs-modules) ships these ON by default in defconfig;
+  # here we turn off the ones the user unchecked before olddefconfig.
+  ENABLE_REKERNEL="${ENABLE_REKERNEL:-true}"       # process/app detection (binder+signal hooks)
+  ENABLE_DROIDSPACES="${ENABLE_DROIDSPACES:-true}" # IPC/namespaces/netfilter/tmpfs options
+  ENABLE_BBGUARD="${ENABLE_BBGUARD:-true}"         # Baseband-guard telephony LSM
+  ENABLE_BBRV3="${ENABLE_BBRV3:-true}"             # BBRv3 TCP congestion control (built-in code; toggle = default CC)
+
+  local cfg="${OUT_DIR}/.config"
+  local kc="${KERNEL_DIR}/scripts/config"
+
+  if [[ "${ENABLE_REKERNEL}" == "true" ]]; then
+    "${kc}" --file "${cfg}" --enable REKERNEL || true
+  else
+    "${kc}" --file "${cfg}" --disable REKERNEL || true
+  fi
+
+  if [[ "${ENABLE_DROIDSPACES}" == "true" ]]; then
+    for sym in POSIX_MQUEUE IPC_NS PID_NS DEVTMPFS \
+               NETFILTER_XT_MATCH_ADDRTYPE IP_NF_TARGET_REJECT NETFILTER_XT_TARGET_LOG \
+               NETFILTER_XT_MATCH_RECENT IP_SET IP_SET_HASH_IP IP_SET_HASH_NET NETFILTER_XT_SET \
+               TMPFS_POSIX_ACL TMPFS_XATTR; do
+      "${kc}" --file "${cfg}" --enable "${sym}" || true
+    done
+  else
+    for sym in POSIX_MQUEUE IPC_NS PID_NS IP_SET IP_SET_HASH_IP IP_SET_HASH_NET \
+               NETFILTER_XT_SET TMPFS_POSIX_ACL TMPFS_XATTR; do
+      "${kc}" --file "${cfg}" --disable "${sym}" || true
+    done
+  fi
+
+  if [[ "${ENABLE_BBGUARD}" == "true" ]]; then
+    "${kc}" --file "${cfg}" --enable BBG || true
+    "${kc}" --file "${cfg}" --set-str CONFIG_LSM "lockdown,yama,loadpin,safesetid,integrity,selinux,smack,tomoyo,apparmor,baseband_guard" || true
+  else
+    "${kc}" --file "${cfg}" --disable BBG || true
+    # Restore MMI-baseline LSM list (no dangling "baseband_guard" in the string).
+    "${kc}" --file "${cfg}" --set-str CONFIG_LSM "lockdown,yama,loadpin,safesetid,integrity,selinux,smack,tomoyo,apparmor" || true
+  fi
+
+  if [[ "${ENABLE_BBRV3}" == "true" ]]; then
+    # BBRv3 code is compiled into tcp_bbr.c; the toggle selects it as default CC + fq pacing.
+    "${kc}" --file "${cfg}" --enable TCP_CONG_BBR || true
+    "${kc}" --file "${cfg}" --enable DEFAULT_BBR || true
+    "${kc}" --file "${cfg}" --set-str DEFAULT_TCP_CONG bbr || true
+    "${kc}" --file "${cfg}" --enable NET_SCH_FQ || true
+    "${kc}" --file "${cfg}" --enable NET_SCH_DEFAULT || true
+    "${kc}" --file "${cfg}" --enable DEFAULT_FQ || true
+  else
+    # MMI baseline: cubic default, no fq-as-default (built-in BBRv3 code stays unselected).
+    "${kc}" --file "${cfg}" --set-str DEFAULT_TCP_CONG cubic || true
+    "${kc}" --file "${cfg}" --disable DEFAULT_BBR || true
+    "${kc}" --file "${cfg}" --disable NET_SCH_DEFAULT || true
+    "${kc}" --file "${cfg}" --disable DEFAULT_FQ || true
+  fi
+
+  info "Module switches: ReKernel=${ENABLE_REKERNEL} DroidSpaces=${ENABLE_DROIDSPACES} BBGuard=${ENABLE_BBGUARD} BBRv3=${ENABLE_BBRV3}"
+
   "${MAKE}" -j"${JOBS}" -C "${KERNEL_DIR}" O="${OUT_DIR}" \
     "${common_make[@]}" \
     HOSTCFLAGS="${hostcflags}" HOSTLDFLAGS="${hostldflags}" \
@@ -647,6 +708,10 @@ pack_anykernel3() {
     WLAN_OUT_DIR="${WLAN_OUT_DIR:-${WORK_DIR}/wlan-kos}" \
     GITHUB_PROXY="${GITHUB_PROXY:-}" \
     ENABLE_SUSFS="${ENABLE_SUSFS:-true}" \
+    ENABLE_REKERNEL="${ENABLE_REKERNEL:-true}" \
+    ENABLE_DROIDSPACES="${ENABLE_DROIDSPACES:-true}" \
+    ENABLE_BBGUARD="${ENABLE_BBGUARD:-true}" \
+    ENABLE_BBRV3="${ENABLE_BBRV3:-true}" \
     KERNEL_IMAGE="${WORK_DIR}/release/Image" \
     bash "${pack_script}"
   endlog
@@ -659,7 +724,24 @@ write_release_notes() {
   local nfc_note="disabled (default)"
   [[ "${ENABLE_NFC}" == "true" ]] && nfc_note="enabled (CONFIG_NFC_QTI_I2C=m)"
 
+  # Module on/off display for the release page
+  local mod_rekernel mod_droidspaces mod_bbguard mod_bbrv3
+  [[ "${ENABLE_REKERNEL:-true}" == "true" ]]    && mod_rekernel="✅ 勾选 ON"    || mod_rekernel="❌ 未勾选 OFF"
+  [[ "${ENABLE_DROIDSPACES:-true}" == "true" ]] && mod_droidspaces="✅ 勾选 ON" || mod_droidspaces="❌ 未勾选 OFF"
+  [[ "${ENABLE_BBGUARD:-true}" == "true" ]]     && mod_bbguard="✅ 勾选 ON"     || mod_bbguard="❌ 未勾选 OFF"
+  [[ "${ENABLE_BBRV3:-true}" == "true" ]]       && mod_bbrv3="✅ 勾选 ON"       || mod_bbrv3="❌ 未勾选 OFF"
+
   cat > "${WORK_DIR}/release/RELEASE_NOTES.md" <<EOF
+## 本次构建的模块选择 (Module options in this build)
+
+| 模块 | 状态 |
+|---|---|
+| **SUSFS** (核心文件系统隐藏，恒开) | ✅ 始终开启 |
+| **Re:Kernel** v8.5 (进程/应用检测, binder+signal hook) | ${mod_rekernel} |
+| **DroidSpaces** (IPC/PID 命名空间, netfilter/IP_SET, tmpfs ACL) | ${mod_droidspaces} |
+| **BBGuard** (Baseband-guard 基带防格机 LSM) | ${mod_bbguard} |
+| **BBRv3** (TCP 拥塞控制升级 + fq pacing) | ${mod_bbrv3} |
+
 ## HOW TO USE
 
 \`\`\`
