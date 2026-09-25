@@ -1,296 +1,322 @@
-# AI 交接文档 — xpeng_kernel_susfs 编译项目
+# AI Handover — xpeng_kernel_susfs
 
-> 本文件由 AI 编写，用于让**下一个 AI（或人类维护者）无需重新摸索**即可接管本仓库的
-> SUSFS + ReSukiSU 内核编译任务。记录了全部踩坑、根因、修复方法和 GitHub Actions 编译流程。
+> This document is AI-written to let the **next AI (or human maintainer) take over without rediscovering everything**:
+> SUSFS + ReSukiSU + optional module kernel builds, all pitfalls, fixes, GitHub Actions flow, verification methods,
+> and version archive.
+>
+> **Corresponds to verified build: 2026-09-25 all-modules local build**, flashed and successfully booted on Edge S30.
 
 ---
 
-## 0. 项目一句话
+## 0. One-liner
 
-Motorola xpeng（Edge S30 / G200，代号 xpeng，**5.4 内核**）的编译脚本仓库，
-内核集成 **SUSFS v2.2.0** + **ReSukiSU（固定 commit 59c99fdf）**，用 GitHub Actions 自动编译并发布 Release。
+Motorola **xpeng** (Edge S30 / G200, **5.4 kernel**) build script repo with
+**SUSFS v2.2.0** + **ReSukiSU (pinned 59c99fdf)** and optional
+**Re:Kernel + Baseband-guard + BBRv3 + DroidSpaces**, built and released via GitHub Actions.
 
-## 1. 仓库拓扑（两个仓库，缺一不可）
+---
 
-| 仓库 | 角色 | 分支 |
-|------|------|------|
-| `paulcbfly/xpeng_kernel_susfs` | **本仓库**：build 脚本 + GitHub Actions workflow | `5.4.302-s3rxc32.33-8-25-ReSukiSU` |
-| `paulcbfly/android_kernel_motorola_xpeng` | 内核源码（fork 自 LuoJuly）+ SUSFS 适配 commit | `5.4.302-s3rxc32.33-8-25-susfs` |
+## 1. Repository topology (two repos, both required)
 
-- build 仓库**不含内核源码**，workflow 运行时通过 `git clone` 拉取内核仓库指定分支。
-- 内核 fork 分支 `5.4.302-s3rxc32.33-8-25-susfs` = 上游 `5.4.302-s3rxc32.33-8-25` + 一个 SUSFS 适配 commit（`b3ecce7eb`）。
+| Repository | Role | Branch |
+|------------|------|--------|
+| `paulcbfly/xpeng_kernel_susfs` | **Build repo**: scripts + GitHub Actions workflow | `5.4.302-s3rxc32.33-8-25-ReSukiSU` |
+| `paulcbfly/android_kernel_motorola_xpeng` | Kernel source + all adaptation commits | `5.4.302-s3rxc32.33-8-25-susfs-modules` |
 
-### 关键文件修改点（build 仓库）
-- `.github/workflows/build-resukisu-edge-s30.yml`（Edge S30）、`build-resukisu-g200.yml`（G200）
+- The build repo does **not** contain kernel sources; the workflow clones the kernel repo at build time.
+- Kernel branch `5.4.302-s3rxc32.33-8-25-susfs-modules`:
+  - Base = upstream `5.4.302-s3rxc32.33-8-25`
+  - + SUSFS commit `b3ecce7eb`
+  - + 4-module port commit `8972cd10c` (Re:Kernel / DroidSpaces / BBGuard / BBRv3)
+  - + fq default qdisc commit `b565fa013`
+- Submodule: `KernelSU` → ReSukiSU @ `59c99fdf` (pinned for SUSFS v2.2.0 compatibility)
+
+### Key build-repo modifications
+
+- `.github/workflows/build-resukisu-edge-s30.yml` (Edge S30), `build-resukisu-g200.yml` (G200)
   - `KERNEL_URL` → `https://github.com/paulcbfly/android_kernel_motorola_xpeng.git`
-  - `KERNEL_BRANCH` → `5.4.302-s3rxc32.33-8-25-susfs`
-  - `UPDATE_RESUKISU` → `${{ inputs.update_resukisu || 'false' }}`（默认**不**更新 ReSukiSU，见问题 #1）
+  - `KERNEL_BRANCH` → `5.4.302-s3rxc32.33-8-25-susfs-modules`
+  - `UPDATE_RESUKISU` → `${{ inputs.update_resukisu || 'false' }}` (default no update)
+  - 4 module inputs: `enable_rekernel` / `enable_droidspaces` / `enable_bbguard` / `enable_bbrv3` (default true)
+  - **No `enable_susfs` toggle**: SUSFS is baseline, always ON
+  - **Fixed `|| 'true'` bug**: old `inputs.x || 'true'` silently forced modules ON; now uses `inputs.enable_x`
 - `scripts/ci/build_resukisu_boot.sh`
-  - `KERNEL_URL` / `KERNEL_BRANCH` 默认值同上
-  - `update_resukisu()` 函数：默认把 ReSukiSU 子模块 **pin 到 `59c99fdf`**（SUSFS v2.2.0 兼容）
-
-## 2. 本次遇到的全部编译问题（按时间顺序）
-
-### 问题 #1（致命，链接失败）：ReSukiSU 更新到 origin/main 后与 SUSFS v2.2.0 不兼容
-
-**现象**：GitHub Actions 编译到最后链接阶段 `ld.lld` 报 4 个 undefined symbol：
-
-```
-ld.lld: error: undefined symbol: susfs_set_current_proc_umounted_for_zygote_next
-ld.lld: error: undefined symbol: susfs_set_current_proc_no_su
-ld.lld: error: undefined symbol: susfs_is_current_proc_no_su
-ld.lld: error: undefined symbol: susfs_clear_current_proc_no_su
->>> referenced by vmlinux.o:(ksu_handle_post_execve.cfi_jt) / (mnt_drop_write.cfi_jt)
-```
-
-**根因**：
-- ReSukiSU 的 `origin/main`（2026-09 以后）在其 `kernel/hook/setuid_hook.c` 中
-  调用了 `susfs_set_current_proc_no_su()` 等 4 个新内核符号，并 `#include <linux/susfs_def.h>`。
-- 这些符号属于 **SUSFS v2.3.0**（`TIF_PROC_NO_SU=34`、`TIF_PROC_UMOUNTED_FOR_ZYGOTE_NEXT=35`），
-  而本内核适配的是 **SUSFS v2.2.0**（只有 `TIF_PROC_UMOUNTED=33`），因此符号未定义。
-- ReSukiSU 官方在 `kernel/tools/inline_hook_check.mk` 中明确声明：
-  *"We keep tracking simonpunk's latest changes, and don't maintain ANY backward compatibility for old version of susfs."*
-  （只跟进最新 susfs，**不向后兼容旧版**）
-
-**修复**：不升级 SUSFS，而是把 ReSukiSU 锁定在 v2.2.0 兼容的 commit `59c99fdf`（2026-08-02）：
-- 修改 `scripts/ci/build_resukisu_boot.sh` 的 `update_resukisu()`，默认 `UPDATE_RESUKISU=false` 时
-  `git checkout -f 59c99fdf...`；
-- workflow 的 `UPDATE_RESUKISU` 改为 `${{ inputs.update_resukisu || 'false' }}`，
-  且 `workflow_dispatch` 输入的 `update_resukisu` 默认值改为 `false`，schedule 也不再强制更新。
-
-**⚠️ 教训**：ReSukiSU 一旦升级到最新 main，内核侧 SUSFS **必须**同步升级到 v2.3.0+，
-否则链接必失败。若未来要升级，参考 `cctv18/susfs4oki`（SUSFS v2.3.0，ReSukiSU 配套）：
-- 其 `susfs_def.h` 用 `inode->i_mapping->flags` 存 AS_FLAGS（v2.2.0 用 `inode->i_state`，**不兼容，不能只替换头文件**）；
-- 需要整体替换 `fs/susfs.c` + `susfs.h` + `susfs_def.h` 并重做 hooks（v2.3.0 无现成 5.4 补丁，需手动移植）。
+  - `KERNEL_URL` / `KERNEL_BRANCH` defaults as above
+  - `build_module_tag()` generates artifact suffix from enabled modules
+  - `build_kernel()` adjusts `.config` via `scripts/config` based on `ENABLE_*` env vars after defconfig and before olddefconfig
+- `scripts/ci/pack_anykernel3.sh`
+  - Renames zip to `AK3-xpeng-EdgeS30-<module-suffix>-<build>.zip`
+  - Release notes list each module as ✅/❌
 
 ---
 
-### 问题 #2（补丁上下文不匹配）：参考 commit 直接 `git apply` 部分文件失败
+## 2. Build issues and fixes (by severity)
 
-**现象**：`git apply --check` 对参考补丁 `2fa1be6` 报 5 个文件失败。
+### Issue #1 (fatal, abandoned): old `-modules-nosec` branch boot-loops
 
-**根因与处理**：
-| 文件 | 原因 | 处理 |
-|------|------|------|
-| `.gitmodules` / `drivers/kernelsu` / `drivers/Kconfig` / `drivers/Makefile` | 参考 commit 是"从零加 ReSukiSU"，包含子模块+软链接+Kconfig；**本内核已集成 ReSukiSU**（作者 LuoJuly 已做） | **跳过**，已存在 |
-| `arch/arm64/configs/vendor/lineage_xpeng.config` | 参考 commit 的目标是 LOS 内核，路径不存在；本内核是 MMI 内核 | 改在 `arch/arm64/configs/vendor/ext_config/moto-lahaina-xpeng.config` 和 `vendor/lahaina-qgki_defconfig` |
-| `fs/proc/fd.c` | 参考内核的 `seq_printf` 有 `ino` 字段，MMI 5.4 内核无 | 手动适配：SUS_MOUNT/OPEN_REDIRECT 分支去掉 `ino` 输出，保留 `mnt_id` 伪装逻辑 |
-| `fs/proc/task_mmu.c` | 参考内核用 `end = VMA_PAD_START(vma)`，MMI 用 `end = vma->vm_end` | 手动适配，其余 SUSFS 逻辑不变 |
-| `kernel/reboot.c` | 本内核已有 `CONFIG_KSU_MANUAL_HOOK` 版本 hook | 保留原有 MANUAL_HOOK 块，新增 `CONFIG_KSU_SUSFS` 块（两者互斥，choice 单选） |
+**Symptom**: `-modules-nosec` compiled successfully but failed to boot.
 
-**核验**：手动适配后 `grep -rn "CONFIG_KSU_MANUAL_HOOK" arch/arm64/configs/` 应 0 残留。
+**Root cause**: Its BBRv3 TCP changes were incompatible with the xpeng 5.4.302 baseline, breaking network init during boot.
+
+**Action**:
+- Delete `-modules-nosec` branch, **never reuse**.
+- Restart from stable `5.4.302-s3rxc32.33-8-25-susfs` and strictly port from **LuoJuly/android_kernel_motorola_sm7325 `lineage-23.2-SUSFS`**.
 
 ---
 
-### 问题 #3（配置切换）：Kconfig choice 互斥，必须把 MANUAL_HOOK 切到 SUSFS
+### Issue #2 (critical): differences between LuoJuly sm7325 and xpeng MMI tree
 
-**根因**：ReSukiSU 的 Kconfig 中 hook 方式是一个 **choice**（三选一）：
-`CONFIG_KSU_TRACEPOINT_HOOK` / `CONFIG_KSU_MANUAL_HOOK` / `CONFIG_KSU_SUSFS`。
-原内核用的是 `MANUAL_HOOK`（作者 resukisu 适配），要启用 SUSFS 必须切换。
+sm7325 is a lineage kernel; xpeng is MMI. Do not blindly `git apply`.
 
-**修改**（两处，缺一不可）：
-1. `arch/arm64/configs/vendor/ext_config/moto-lahaina-xpeng.config`：
-   ```
-   CONFIG_KSU=y
-   CONFIG_KSU_SUSFS=y          # 取代 CONFIG_KSU_MANUAL_HOOK=y
-   CONFIG_KALLSYMS_ALL=y
-   ```
-   （删掉全部 `CONFIG_KSU_MANUAL_HOOK_AUTO_*`）
-2. `arch/arm64/configs/vendor/lahaina-qgki_defconfig`（第 806 行附近）：
-   `CONFIG_KSU_MANUAL_HOOK=y` → `CONFIG_KSU_SUSFS=y`
+| sm7325 original | xpeng reality | Adjustment |
+|---|---|---|
+| defconfig target = `lineage_xpeng.config` | MMI uses `ext_config/moto-lahaina-xpeng.config` fragment | Rewrite to that fragment |
+| `CONFIG_DEFAULT_QDISC="fq"` | only `CONFIG_DEFAULT_NET_SCH` exists | use `NET_SCH_DEFAULT=y` + `DEFAULT_FQ=y` |
+| `NETFILTER_XT_TARGET_REJECT` | only `IP_NF_TARGET_REJECT` exists | use `IP_NF_TARGET_REJECT=y` |
+| CONFIG_LSM includes `bpf` | no `security/bpf` in tree | remove `bpf` from LSM string |
+| `CONFIG_TCP_ECN=y` | no such symbol in 5.4 mainline | skip |
+| `TCP_CONG_BRUTAL` | no source in either tree | skip |
 
-**验证方法**（本地，无需完整编译）：
+**Porting method**:
+- Use `git apply --include=...` for clean file additions
+- Manually edit `defconfig`, `.gitmodules`, `drivers/Kconfig`, `drivers/Makefile`, `security/Kconfig`, `security/Makefile`
+- Re:Kernel final version lives in `drivers/rekernel/`; remove stale `drivers/net/rekernel/` references
+
+---
+
+### Issue #3 (local build blocker): missing `python` command breaks WLAN build
+
+**Symptom**:
+
+```
+/bin/sh: 1: python: not found
+.../qcacld-3.0/.wlan/Kbuild:36: .../configs/default_defconfig: No such file or directory
+```
+
+**Root cause**: `qcacld-3.0/.wlan/Kbuild` line 33 calls `python -c "import os.path; print(os.path.relpath(...))"`.
+Ubuntu 22.04 has only `python3`. Empty output corrupts `WLAN_ROOT`, so `configs/default_defconfig` is not found.
+
+**Fix**:
+
 ```bash
-# 用 kernel 自带 merge_config 模拟 GKI 合并流程（顺序=base→GKI→QGKI→debugfs→moto ext_config）
-scripts/kconfig/merge_config.sh -O /tmp/kmerge -m \
-  arch/arm64/configs/gki_defconfig \
-  arch/arm64/configs/vendor/lahaina_GKI.config \
-  arch/arm64/configs/vendor/lahaina_QGKI.config \
-  arch/arm64/configs/vendor/debugfs.config \
-  arch/arm64/configs/vendor/ext_config/moto-lahaina-xpeng.config
-# 然后 olddefconfig 完整解析（本机是 aarch64，gcc 直接可用；LD=ld 绕过交叉 ld 版本检测）
-cp /tmp/kmerge/.config /tmp/kout/.config
-make O=/tmp/kout ARCH=arm64 LD=ld olddefconfig
-grep -E "^CONFIG_KSU" /tmp/kout/.config
-# 期望：CONFIG_KSU=y + CONFIG_KSU_SUSFS=y + 全部 KSU_SUSFS_* 子选项 =y，无 MANUAL_HOOK
+ln -sf /usr/bin/python3 /usr/local/bin/python
 ```
 
+GitHub Actions' ubuntu-22.04 runner provides `python`, so CI does not hit this.
+
 ---
 
-### 问题 #4（本地验证陷阱）：gcc-wrapper.py 把 warning 当 error（CI 不会踩，本地会）
+### Issue #4 (download blocker): `ghproxy.net` does not proxy `api.github.com`, magiskboot 403
 
-**现象**：本地 `make fs/susfs.o` 报
-`error, forbidden warning: kern_levels.h:5 ... format '%u' expects ... 'long long int'`。
+**Symptom**:
 
-**根因**：MMI 内核的 `Makefile:466` 把 CC 包了一层 `scripts/gcc-wrapper.py`，
-该脚本把**非白名单的编译警告一律视为错误**（`sys.exit(1)`）。SUSFS v2.2.0 上游代码在
-内核 < 6.1 分支的日志格式串里用了 `%u` 格式化 `long long` 类型的 `spoofed_size`。
-
-**为什么 CI 不炸**：CI 用 Android clang 编译，内核会把 `-Wno-format` 加进 CFLAGS
-（`make V=1` 可见），clang 的 format 警告被整体关掉；而 gcc 本地的格式检查关不干净。
-**结论**：不要为了本地 gcc 报错去改 susfs.c 的格式串；CI（clang）下无警告。
-本地验证请换用 `make CC=clang`。
-
-**本地单文件/子系统快速验证**（已验证通过）：
-```bash
-make O=/tmp/kout ARCH=arm64 prepare          # 生成本地头文件（缺编译器的坑：先 make prepare 到报错前即可）
-make O=/tmp/kout ARCH=arm64 CC=clang fs/susfs.o fs/exec.o fs/namei.o fs/namespace.o \
-  fs/open.o fs/notify/fdinfo.o fs/proc/base.o fs/proc/cmdline.o fs/proc/fd.o \
-  fs/proc/task_mmu.o fs/proc_namespace.o fs/read_write.o fs/readdir.o fs/stat.o fs/statfs.o \
-  drivers/input/input.o kernel/kallsyms.o kernel/reboot.o kernel/sys.o mm/memory.o security/selinux/avc.o
+```
+curl: (22) The requested URL returned error: 403
 ```
 
----
+**Root cause**: Script tried to fetch Magisk release via `ghproxy.net`, which returns 403 for `api.github.com`.
 
-### 问题 #5（hook 强制检查）：编译 KernelSU 驱动时 ReSukiSU 会校验内核 hooks
+**Fix**:
+- Direct GitHub API for latest tag
+- Direct download of Magisk APK
+- Extract `lib/x86_64/libmagiskboot.so` as `magiskboot`
 
-**现象/机制**：编译 `drivers/kernelsu/` 时，`kernel/tools/inline_hook_check.mk`
-用 grep 校验 7 个必要 hook 必须存在于内核源码，缺失即 `$(error)` 编译失败。
-
-**要求清单**（SUSFS 模式下）：
-| hook | 所在文件 |
-|------|----------|
-| `ksu_handle_setresuid` | kernel/sys.c |
-| `ksu_handle_execveat` | fs/exec.c |
-| `ksu_handle_faccessat` | fs/open.c |
-| `ksu_handle_sys_read` | fs/read_write.c |
-| `ksu_handle_stat` | fs/stat.c |
-| `ksu_handle_sys_reboot` | kernel/reboot.c |
-| `ksu_handle_input_handle_event` | drivers/input/input.c |
-
-同时检查**旧版不兼容 hook 不得存在**：`ksu_vfs_read_hook`、`ksu_input_hook`、
-`ksu_execveat_hook`、`ksu_init_rc_hook`。
-
-**验证**：编译 `drivers/kernelsu/` 时日志出现 `-- ReSukiSU/susfs_inline: ksu_handle_* found` 且
-`-- SUSFS_VERSION: v2.2.0` 即通过。若有 `WARNING: Detected KSU_MANUAL_HOOK guard` 属正常
-（源码中保留了 MANUAL_HOOK 块，choice 互斥下不参与编译，只是 grep 能搜到）。
+See `tools/get_magiskboot.sh`.
 
 ---
 
-### 问题 #6（defconfig 里 CONFIG_KSU 的来龙去脉）
+### Issue #5 (WSL process management): `nohup ... &` killed when `wsl.exe` exits
 
-- `lahaina-qgki_defconfig` 里的 KSU 配置是 **generate_defconfig 流程生成的产物**
-  （`scripts/gki/generate_defconfig.sh` 会把合并结果写回该文件），不是手写的。
-- 真正的输入是 `ext_config/moto-lahaina-xpeng.config`（MOTO_REQUIRED_CONFIG 最后合并，优先级最高）。
-- workflow 构建时会 `git checkout HEAD -- lahaina-qgki_defconfig` 恢复，所以两处都改了才能自洽。
+**Root cause**: When the `wsl.exe` invocation ends, its login shell and children are terminated; `nohup` cannot survive that.
 
-## 3. GitHub Actions 编译流程（下一个 AI 直接照此操作）
+**Action**:
+- Wrap `wsl.exe` calls with **Bash tool `run_in_background=true`** for long tasks
+- Do not rely on `nohup ... &` across `wsl.exe` sessions
 
-### 触发方式
+---
+
+### Issue #6 (proxy ineffective): Windows proxy not automatically usable from WSL git
+
+**Symptom**: User has a Windows proxy, but WSL `git clone` still goes direct and is slow/unstable.
+
+**Root cause**:
+- WSL2 is NAT; `127.0.0.1` is WSL's own loopback, not Windows
+- No `http_proxy`/`https_proxy` env vars in WSL, no git proxy config
+- Windows system proxy may be off
+- Proxy client does not allow LAN, so WSL cannot reach the Windows gateway proxy port
+
+**Action**:
+- Fastest: use `ghproxy.net` mirror (~2.7 MB/s, stable)
+- If proxy required: enable Allow LAN on client, then in WSL `export https_proxy=http://<Windows-gateway-IP>:port`
+
+---
+
+### Issue #7 (config merge): DroidSpaces vs SYSVIPC FCM conflict
+
+**Symptom**: Some DroidSpaces configs want `CONFIG_SYSVIPC=y`, but xpeng baseline keeps it off.
+
+**Root cause**: FCM v7 requires certain IPC configs to stay default-off; DroidSpaces KABI patch moves `sysv` fields into KABI reserved slots for compatibility.
+
+**Action**:
+- Apply KABI patch (LuoJuly commit `f05b8df8`)
+- Keep `CONFIG_SYSVIPC` default-off
+- Enable `IPC_NS`, `PID_NS`, `POSIX_MQUEUE` etc. for DroidSpaces
+
+---
+
+### Issue #8 (BBGuard LSM): `CONFIG_LSM` string format and validation
+
+**Symptom**: With BBGuard enabled, kernel LSM registration fails or `CONFIG_LSM` is overwritten incorrectly.
+
+**Root cause**: `CONFIG_LSM` is a double-quoted string like `"lockdown,yama,baseband_guard"`. Direct `--set-str` can fail with spaces or special characters.
+
+**Action**:
+- In `build_kernel()`, read current `CONFIG_LSM` and append `baseband_guard`
+- Preserve existing LSMs (`lockdown,yama,selinux`)
+- Do not overwrite with a fixed string
+
+---
+
+## 3. GitHub Actions build flow
+
+### Trigger
+
 ```bash
-# 手动触发 Edge S30 编译（默认不更新 ReSukiSU = 锁定 59c99fdf）
 gh workflow run build-resukisu-edge-s30.yml --ref 5.4.302-s3rxc32.33-8-25-ReSukiSU
-
-# 手动触发 G200
 gh workflow run build-resukisu-g200.yml --ref 5.4.302-s3rxc32.33-8-25-ReSukiSU
-
-# 查看状态/日志
 gh run list --workflow build-resukisu-edge-s30.yml --limit 3
-gh run view <RUN_ID> --log-failed     # 失败日志
-```
-- 仓库每月 1 日 UTC 00:00（S30）/ 02:00（G200）自动跑（schedule）。
-- 认证：环境变量 `GH_TOKEN`（已配置，权限含 `repo` + `workflow`）。
-
-### workflow 内部流程（约 20-60 分钟）
-1. `actions/checkout` build 仓库 `5.4.302-s3rxc32.33-8-25-ReSukiSU`
-2. 缓存/下载工具链：`clang-r383902b1`（AOSP）+ GCC 4.9（Lineage 19.1）+ magiskboot
-3. `build_resukisu_boot.sh`：
-   - `fetch_kernel`：clone 内核 fork 的 `5.4.302-s3rxc32.33-8-25-susfs`（--recursive）
-   - `update_resukisu`：**把 KernelSU 子模块 pin 到 59c99fdf**（因 SUSFS v2.2.0）
-   - `setup_toolchain`、`build_kernel`（generate_defconfig → Image）
-   - `build_wlan_modules`（WiFi ko，vermagic 匹配）
-   - `repack_boot`（magiskboot 解包 boot_oem.img 换内核重打包成 boot_ksu.img）
-   - `pack_anykernel3`（Image + vendor WiFi kos 打成 AnyKernel3 zip）
-4. 上传 artifact + 创建 GitHub **Release**（boot_ksu.img / Image / AnyKernel3.zip / wlan zip）
-
-### 产物命名
-```
-AnyKernel3-xpeng-EdgeS30-ReSukiSU-5.4.302-v4.1.0-1332-g59c99fdf-S3RXC32.33-8-25.zip
-boot_ksu.img   # fastboot: fastboot flash boot boot_ksu.img
+gh run view <RUN_ID> --log-failed     # failed logs
 ```
 
-## 4. 本地如何复现构建（可选）
+- Monthly schedule: UTC 00:00 1st (Edge S30), 02:00 1st (G200), all modules ON by default
+- Web trigger: Actions → Run workflow → check/uncheck modules
+
+### Workflow internals (40-60 min)
+
+1. `actions/checkout` build repo `5.4.302-s3rxc32.33-8-25-ReSukiSU`
+2. Cache/download toolchain: `clang-r383902b1` (AOSP) + GCC 4.9 (Lineage 19.1) + magiskboot
+3. `build_resukisu_boot.sh`:
+   - `fetch_kernel`: clone kernel fork `5.4.302-s3rxc32.33-8-25-susfs-modules` (--recursive)
+   - `update_resukisu`: pin KernelSU submodule to `59c99fdf` (default)
+   - `setup_toolchain`, `build_kernel` (generate_defconfig → **module toggles** → olddefconfig → Image)
+   - `build_wlan_modules` (WiFi kos)
+   - `repack_boot` (magiskboot packs boot_ksu.img)
+   - `pack_anykernel3` (Image + WiFi kos, AK3 naming)
+4. Upload artifact + create GitHub Release (body lists module toggle states)
+
+### Artifact naming
+
+```
+AK3-xpeng-EdgeS30-ReKernel-DroidSpaces-BBGuard-BBRv3-r{N}.zip
+boot_ksu.img
+Image
+wlan_crc_match_5.4.302-ksu-g<sha>_.zip
+```
+
+---
+
+## 4. Module toggle implementation
+
+In `build_kernel()`, after `make vendor/lahaina-qgki_defconfig` and before `olddefconfig`:
 
 ```bash
-export VARIANT=edge-s30    # 或 g200（ENABLE_NFC=true）
+sha="${KERNEL_DIR}/scripts/config"
+"$sha" --file "${OUT_DIR}/.config" --enable/--disable/--set-str <CONFIG> ...
+```
+
+| Env var | OFF action |
+|---|---|
+| `ENABLE_REKERNEL=false` | `--disable REKERNEL` |
+| `ENABLE_BBGUARD=false` | `--disable BBG`; remove `baseband_guard` from `CONFIG_LSM` |
+| `ENABLE_BBRV3=false` | `--disable TCP_CONG_BBR DEFAULT_BBR`; `--set-str DEFAULT_TCP_CONG cubic` |
+| `ENABLE_DROIDSPACES=false` | `--disable POSIX_MQUEUE IPC_NS PID_NS DEVTMPFS NETFILTER_XT_SET IP_SET` etc. |
+
+> SUSFS is baseline and always ON; there is no `ENABLE_SUSFS` toggle.
+
+---
+
+## 5. Local reproduction (verified)
+
+### Environment
+
+- Windows 11 + WSL2 `Ubuntu-22.04`
+- 16 cores / 7.4G RAM + 9G swap
+- `/root/xpeng-build` (build repo) + `/root/kernel-src` (kernel source)
+
+### Steps
+
+```bash
+# 1. Ensure python symlink exists
+ln -sf /usr/bin/python3 /usr/local/bin/python
+
+# 2. Build
+export VARIANT=edge-s30
 export ENABLE_NFC=false
 export UPDATE_RESUKISU=false
 export KERNEL_URL=https://github.com/paulcbfly/android_kernel_motorola_xpeng.git
-export KERNEL_BRANCH=5.4.302-s3rxc32.33-8-25-susfs
+export KERNEL_BRANCH=5.4.302-s3rxc32.33-8-25-susfs-modules
 ./scripts/ci/build_resukisu_boot.sh
-# 产物：.ci-work/edge-s30/release/
 ```
-> 完整本地构建需要下载 clang-r383902b1（约 1-2GB），磁盘需 >20GB 空闲。
 
-## 5. 踩坑速查表（TL;DR）
+### Time baseline
 
-| 症状 | 原因 | 处置 |
-|------|------|------|
-| ld.lld undefined `susfs_*_no_su` | ReSukiSU 被更新到 main，需 SUSFS v2.3+ | 锁回 `59c99fdf`；或整体升 SUSFS v2.3.0 |
-| 本地 gcc `forbidden warning %u` | MMI `gcc-wrapper.py` 把 warning 当 error | 无视；验证用 `CC=clang` |
-| Kconfig 里 `KSU_SUSFS` 不生效 | choice 与 MANUAL_HOOK 互斥，残留未清 | 两处 defconfig 都改：`ext_config/moto-lahaina-xpeng.config` + `lahaina-qgki_defconfig` |
-| hook 检查 `$(error)` | 7 个 hooks 缺一个 | 对照第 2 节问题 #5 清单补齐 |
-| `fs/proc/fd.c` patch 不适用 | 参考内核有 `ino` 字段，MMI 无 | 去掉 ino 输出即可，保留 mnt_id 伪装 |
-| `compile.h not found`（本地单文件编译） | 未完整 `make prepare` | 本地验证可忽略，CI 全量编译会生成 |
+| Stage | Time |
+|---|---|
+| First toolchain download | ~6.5 min |
+| Kernel Image build | ~17 min |
+| WLAN 3-chip modules | ~19.5 min |
+| repack + AnyKernel3 | ~20 sec |
+| **Full successful build** | **~43.5 min** |
 
-## 6. 未来升级路径（如需 SUSFS v2.3.0 / 最新 ReSukiSU）
+### Artifacts
 
-1. 内核侧：用 `cctv18/susfs4oki`（v2.3.0）替换 `fs/susfs.c`、`include/linux/susfs.h`、`include/linux/susfs_def.h`；
-   **注意 AS_FLAGS 从 `inode->i_state` 变为 `inode->i_mapping->flags`**，所有 hook 文件里的
-   `set_bit/test_bit(SUSFS_*, &inode->i_state)` 都要同步改；
-   v2.3.0 新增 `fs/super.c` hook，5.4 需手动移植（无现成 5.4 补丁）。
-2. 放开 `UPDATE_RESUKISU`（改回 `github.event_name == 'schedule' || inputs.update_resukisu` 或默认 true）。
-3. 升级后务必本地先验证：`make CC=clang fs/susfs.o ...` + `drivers/kernelsu/` hook 检查。
+`.ci-work/<variant>/release/`:
+
+- `boot_ksu.img` / `Image`
+- `wlan_crc_match_*.zip`
+- `AK3-*.zip`
 
 ---
 
-*文档生成时间：2026-09-23。作者：AI 助手（100% AI-generated project）。*
+## 6. Pitfall quick-reference
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Boot loop after flash | Old `-modules-nosec` branch BBRv3 incompatible | Use new `susfs-modules` branch |
+| WLAN build `python: not found` | WSL lacks `python` command | `ln -sf /usr/bin/python3 /usr/local/bin/python` |
+| `ghproxy.net` 403 | Does not proxy `api.github.com` | Use direct GitHub API / Magisk download |
+| WSL background clone interrupted | `wsl.exe` exit kills children | Wrap `wsl.exe` with Bash tool `run_in_background=true` |
+| `CONFIG_LSM` contains `bpf` error | xpeng tree has no `security/bpf` | Remove `bpf` from LSM string |
+| `DEFAULT_QDISC="fq"` not found | xpeng uses `DEFAULT_NET_SCH` | `NET_SCH_DEFAULT=y` + `DEFAULT_FQ=y` |
+| `NETFILTER_XT_TARGET_REJECT` not found | xpeng uses `IP_NF_TARGET_REJECT` | Use `IP_NF_TARGET_REJECT=y` |
+| `drivers/net/rekernel/Kconfig` missing | Stale netlink version reference | Remove from `drivers/net/Kconfig` + `Makefile` |
+
 ---
 
-# 附录 B：二次开发（2026-09-24）— 模块扩展 + 谷歌安全补丁
+## 7. Future upgrade paths
 
-## 新增内核分支
-`paulcbfly/android_kernel_motorola_xpeng` 分支 **`5.4.302-s3rxc32.33-8-25-modules`**
-= `5.4.302-s3rxc32.33-8-25-susfs`（SUSFS v2.2.0 基座）+ commit `8f74e34f6`：
+### Upgrade SUSFS v2.3.0 / latest ReSukiSU
 
-| 模块 | 来源（LuoJuly sm7325 lineage-23.2-SUSFS） | 移植方式 |
-|------|------|------|
-| **Re:Kernel** | commit b133a190c + b68efe6b2 | drivers/rekernel/ 直接拷贝最终版 + binder.c/signal.c hooks 手动移植 + drivers/Kconfig/Makefile |
-| **Baseband-guard (BBGuard)** | commit 41952b459 + 8bb2555cd | `git submodule add vc-teahouse/Baseband-guard`（pin cef0daa）+ security/baseband-guard 软链接 + security/Kconfig+Makefile |
-| **BBRv3** | commit 899d12128 | git apply 成功（tcp_bbr.c 1672 行与 lj_susfs 完全一致 + tcp.h/tcp_rate.c） |
-| **DroidSpaces** | commit 8b6309cd7 | 仅 defconfig（IPC/PID NS、DEVTMPFS、netfilter、IP_SET、TMPFS xattr/acl） |
-| **谷歌安全补丁** | lj_susfs 内 net/ 上游修复（来自 AOSP/LineageOS） | 8 个 CVE 修复全部 git apply 成功：af_packet fanout UAF、skbuff shared-frag×2、pskb_carve zerocopy、ipv6 icmp/ip6_tunnel cb[] 泄露、tipc double-free、nfc llcp UAF |
+1. Kernel side: replace `fs/susfs.c`, `include/linux/susfs.h`, `include/linux/susfs_def.h` with `cctv18/susfs4oki` (v2.3.0);
+   **note AS_FLAGS moved from `inode->i_state` → `inode->i_mapping->flags`**, so update all set_bit/test_bit in hook files;
+   v2.3.0 adds `fs/super.c` hook, needs manual 5.4 port.
+2. Release `UPDATE_RESUKISU` lock (set schedule/default to true).
+3. Verify locally before pushing.
 
-## 本次坑（新增）
-1. **drivers/net/Kconfig 残留**：先应用了 b68efe6b2（netlink 版，注册 drivers/net/rekernel），
-   后应用 b133a190c（迁移到 drivers/rekernel）时旧 Kconfig 引用没删 → `olddefconfig` 报
-   `can't open file "drivers/net/rekernel/Kconfig"`。**修复**：`sed -i` 删除
-   `drivers/net/Kconfig` 的 source 行和 `drivers/net/Makefile` 的 obj 行。
-   （若直接从最终版拷贝可完全避免此问题）
-2. **rtmutex BACKPORT 补丁不适用**：lj_susfs 的 rtmutex 修复是 BACKPORT 新版 API，
-   与 5.4.302 基线上下文不符 → 跳过（稳定性修复非安全）。
-   同理由：tcp `__user` annotation 补丁因 BBRv3 已改 tcp.h 而冲突 → 跳过（编译类修复非安全）。
-3. **nfc llcp 补丁编译验证**：Edge S30 变体内核 NFC 默认关闭（`NFC_QTI_I2C` 不编），
-   `net/nfc/llcp_core.o` 无构建规则属正常，不影响补丁有效性（NFC 开启时才会编入）。
+### Add new modules
 
-## 模块可选编译机制（workflow_dispatch 输入）
-- `ENABLE_SUSFS`（默认 true；false 回退 KSU_MANUAL_HOOK）
-- `ENABLE_REKERNEL`（默认 true）
-- `ENABLE_BBGUARD`（默认 true）
-- `ENABLE_BBRV3`（默认 true；false 回退 cubic）
-- `ENABLE_DROIDSPACES`（默认 true）
+- Reference LuoJuly sm7325 lineage branch commits
+- Watch xpeng vs sm7325 differences: defconfig path, Kconfig symbols, LSM string
+- Add a separate toggle for each new module, default OFF, enable by default only after stable verification
 
-实现：`build_resukisu_boot.sh` 在 defconfig 生成后、olddefconfig 前用
-`scripts/config --enable/--disable/--set-str` 按环境变量调整 `.config`。
-验证过 `ENABLE_SUSFS=false + ENABLE_REKERNEL=false`：最终 .config 正确切换
-`KSU_MANUAL_HOOK=y`（含 AUTO_* 子项）、`REKERNEL` 消失。
+---
 
-## 谷歌安全补丁完整清单
-```
-net/packet/af_packet.c  fanout UAF (NETDEV_UP race)      [CVE-2024-36971 类]
-net/core/skbuff.c       shared-frag preserve x2 + zerocopy
-net/ipv6/icmp.c         ip6_err_gen_icmpv6_unreach cb[] clear
-net/ipv6/ip6_tunnel.c   ip4ip6_err cb[] clear
-net/tipc/msg.c          tipc_buf_append double-free
-net/nfc/llcp_core.c     missing return after LLCP_CLOSED
-```
+## 8. Version archive
+
+Archive of this verified build:
+
+- [`docs/ARCHIVE-2026-09-25-modules-local.md`](ARCHIVE-2026-09-25-modules-local.md)
+
+---
+
+*Document generated 2026-09-25. Author: AI assistant (100% AI-generated project).*
