@@ -4,7 +4,7 @@
 > SUSFS + ReSukiSU + 可选模块内核编译任务。记录了内核移植与编译相关的踩坑、根因、修复方法、
 > GitHub Actions 编译流程和版本归档。
 > 
-> **本文档对应可用版本：2026-09-25 模块全开本地构建**，已在 Edge S30 刷机并成功开机。
+> **本文档对应可用版本：2026-09-25 CVE 模块全开本地构建**，已在 Edge S30 刷机并成功开机。
 
 ---
 
@@ -23,6 +23,7 @@ Motorola xpeng（Edge S30 / G200，代号 xpeng，**5.4 内核**）的编译脚�
 |------|------|------|
 | `paulcbfly/xpeng_kernel_susfs` | **编译仓库**：build 脚本 + GitHub Actions workflow | `5.4.302-s3rxc32.33-8-25-ReSukiSU` |
 | `paulcbfly/android_kernel_motorola_xpeng` | 内核源码 + 全部适配 commit | `5.4.302-s3rxc32.33-8-25-susfs-modules` |
+| `paulcbfly/android_kernel_motorola_xpeng` | 内核源码 + 适配 commit + 从 sm8250 反向移植的 CVE 补丁 | `5.4.302-s3rxc32.33-8-25-susfs-modules-cve` |
 
 - 编译仓库**不含内核源码**，workflow 运行时 `git clone` 内核仓库指定分支。
 - 内核分支 `5.4.302-s3rxc32.33-8-25-susfs-modules`：
@@ -30,6 +31,12 @@ Motorola xpeng（Edge S30 / G200，代号 xpeng，**5.4 内核**）的编译脚�
   - + SUSFS 适配 commit `b3ecce7eb`（SUSFS v2.2.0 + ReSukiSU 子模块 pin 59c99fdf）
   - + 四模块移植 commit `8972cd10c`（Re:Kernel / DroidSpaces / BBGuard / BBRv3）
   - + fq 默认 qdisc commit `b565fa013`
+- 内核分支 `5.4.302-s3rxc32.33-8-25-susfs-modules-cve`：
+  - 与 `susfs-modules` 相同
+  - + 从 `liyafe1997/kernel_xiaomi_sm8250_mod` 反向移植的安全补丁：
+    - `80220337b` — rtmutex：CVE-2026-43499 / CVE-2026-53163
+    - `ed2922c53` — kgsl：对齐值符号扩展问题（CVE-2026-21385）
+    - `67040a1d4` — kgsl：perfcounter 动态列表缓冲区溢出（CVE-2025-59600）
 - 子模块：`KernelSU` → ReSukiSU @ `59c99fdf`（固定，SUSFS v2.2.0 兼容）
 
 ### 关键文件修改点（编译仓库）
@@ -268,7 +275,8 @@ export KERNEL_BRANCH=5.4.302-s3rxc32.33-8-25-susfs-modules
 
 本次验证通过的版本归档见：
 
-- [`docs/ARCHIVE-2026-09-25-modules-local.md`](ARCHIVE-2026-09-25-modules-local.md)
+- [`docs/ARCHIVE-2026-09-25-modules-local.md`](ARCHIVE-2026-09-25-modules-local.md) — 基础模块全开版本
+- [`docs/ARCHIVE-2026-09-25-cve.md`](ARCHIVE-2026-09-25-cve.md) — 同上，额外包含 CVE 反向移植（rtmutex + kgsl）
 
 ---
 

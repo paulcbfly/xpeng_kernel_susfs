@@ -4,7 +4,7 @@
 > SUSFS + ReSukiSU + optional module kernel builds, kernel porting and compile pitfalls, fixes, GitHub Actions flow,
 > verification methods, and version archive.
 >
-> **Corresponds to verified build: 2026-09-25 all-modules local build**, flashed and successfully booted on Edge S30.
+> **Corresponds to verified build: 2026-09-25 CVE all-modules local build**, flashed and successfully booted on Edge S30.
 
 ---
 
@@ -22,6 +22,7 @@ Motorola **xpeng** (Edge S30 / G200, **5.4 kernel**) build script repo with
 |------------|------|--------|
 | `paulcbfly/xpeng_kernel_susfs` | **Build repo**: scripts + GitHub Actions workflow | `5.4.302-s3rxc32.33-8-25-ReSukiSU` |
 | `paulcbfly/android_kernel_motorola_xpeng` | Kernel source + all adaptation commits | `5.4.302-s3rxc32.33-8-25-susfs-modules` |
+| `paulcbfly/android_kernel_motorola_xpeng` | Kernel source + adaptation commits + CVE backports from sm8250 | `5.4.302-s3rxc32.33-8-25-susfs-modules-cve` |
 
 - The build repo does **not** contain kernel sources; the workflow clones the kernel repo at build time.
 - Kernel branch `5.4.302-s3rxc32.33-8-25-susfs-modules`:
@@ -29,6 +30,12 @@ Motorola **xpeng** (Edge S30 / G200, **5.4 kernel**) build script repo with
   - + SUSFS commit `b3ecce7eb`
   - + 4-module port commit `8972cd10c` (Re:Kernel / DroidSpaces / BBGuard / BBRv3)
   - + fq default qdisc commit `b565fa013`
+- Kernel branch `5.4.302-s3rxc32.33-8-25-susfs-modules-cve`:
+  - Same as `susfs-modules`
+  - + CVE backports from `liyafe1997/kernel_xiaomi_sm8250_mod`:
+    - `80220337b` — rtmutex: CVE-2026-43499 / CVE-2026-53163
+    - `ed2922c53` — kgsl: sign extension on alignments (CVE-2026-21385)
+    - `67040a1d4` — kgsl: perfcounter dynamic list overflow (CVE-2025-59600)
 - Submodule: `KernelSU` → ReSukiSU @ `59c99fdf` (pinned for SUSFS v2.2.0 compatibility)
 
 ### Key build-repo modifications
@@ -267,7 +274,8 @@ A v2.3 port was attempted by replacing `fs/susfs.c`, `include/linux/susfs.h`, `i
 
 Archive of this verified build:
 
-- [`docs/ARCHIVE-2026-09-25-modules-local.md`](ARCHIVE-2026-09-25-modules-local.md)
+- [`docs/ARCHIVE-2026-09-25-modules-local.md`](ARCHIVE-2026-09-25-modules-local.md) — base all-modules build
+- [`docs/ARCHIVE-2026-09-25-cve.md`](ARCHIVE-2026-09-25-cve.md) — same as above plus CVE backports (rtmutex + kgsl)
 
 ---
 
