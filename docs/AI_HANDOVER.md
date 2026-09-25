@@ -1,8 +1,8 @@
 # AI Handover — xpeng_kernel_susfs
 
 > This document is AI-written to let the **next AI (or human maintainer) take over without rediscovering everything**:
-> SUSFS + ReSukiSU + optional module kernel builds, all pitfalls, fixes, GitHub Actions flow, verification methods,
-> and version archive.
+> SUSFS + ReSukiSU + optional module kernel builds, kernel porting and compile pitfalls, fixes, GitHub Actions flow,
+> verification methods, and version archive.
 >
 > **Corresponds to verified build: 2026-09-25 all-modules local build**, flashed and successfully booted on Edge S30.
 
@@ -106,52 +106,7 @@ GitHub Actions' ubuntu-22.04 runner provides `python`, so CI does not hit this.
 
 ---
 
-### Issue #4 (download blocker): `ghproxy.net` does not proxy `api.github.com`, magiskboot 403
-
-**Symptom**:
-
-```
-curl: (22) The requested URL returned error: 403
-```
-
-**Root cause**: Script tried to fetch Magisk release via `ghproxy.net`, which returns 403 for `api.github.com`.
-
-**Fix**:
-- Direct GitHub API for latest tag
-- Direct download of Magisk APK
-- Extract `lib/x86_64/libmagiskboot.so` as `magiskboot`
-
-See `tools/get_magiskboot.sh`.
-
----
-
-### Issue #5 (WSL process management): `nohup ... &` killed when `wsl.exe` exits
-
-**Root cause**: When the `wsl.exe` invocation ends, its login shell and children are terminated; `nohup` cannot survive that.
-
-**Action**:
-- Wrap `wsl.exe` calls with **Bash tool `run_in_background=true`** for long tasks
-- Do not rely on `nohup ... &` across `wsl.exe` sessions
-
----
-
-### Issue #6 (proxy ineffective): Windows proxy not automatically usable from WSL git
-
-**Symptom**: User has a Windows proxy, but WSL `git clone` still goes direct and is slow/unstable.
-
-**Root cause**:
-- WSL2 is NAT; `127.0.0.1` is WSL's own loopback, not Windows
-- No `http_proxy`/`https_proxy` env vars in WSL, no git proxy config
-- Windows system proxy may be off
-- Proxy client does not allow LAN, so WSL cannot reach the Windows gateway proxy port
-
-**Action**:
-- Fastest: use `ghproxy.net` mirror (~2.7 MB/s, stable)
-- If proxy required: enable Allow LAN on client, then in WSL `export https_proxy=http://<Windows-gateway-IP>:port`
-
----
-
-### Issue #7 (config merge): DroidSpaces vs SYSVIPC FCM conflict
+### Issue #4 (config merge): DroidSpaces vs SYSVIPC FCM conflict
 
 **Symptom**: Some DroidSpaces configs want `CONFIG_SYSVIPC=y`, but xpeng baseline keeps it off.
 
@@ -164,7 +119,7 @@ See `tools/get_magiskboot.sh`.
 
 ---
 
-### Issue #8 (BBGuard LSM): `CONFIG_LSM` string format and validation
+### Issue #5 (BBGuard LSM): `CONFIG_LSM` string format and validation
 
 **Symptom**: With BBGuard enabled, kernel LSM registration fails or `CONFIG_LSM` is overwritten incorrectly.
 
@@ -239,9 +194,10 @@ sha="${KERNEL_DIR}/scripts/config"
 
 ### Environment
 
-- Windows 11 + WSL2 `Ubuntu-22.04`
+- Host: Ubuntu 22.04 (or equivalent Linux container/VM)
 - 16 cores / 7.4G RAM + 9G swap
-- `/root/xpeng-build` (build repo) + `/root/kernel-src` (kernel source)
+- Build repo path: `/root/xpeng-build`
+- Kernel source path: `/root/kernel-src`
 
 ### Steps
 
@@ -283,9 +239,7 @@ export KERNEL_BRANCH=5.4.302-s3rxc32.33-8-25-susfs-modules
 | Symptom | Cause | Fix |
 |---|---|---|
 | Boot loop after flash | Old `-modules-nosec` branch BBRv3 incompatible | Use new `susfs-modules` branch |
-| WLAN build `python: not found` | WSL lacks `python` command | `ln -sf /usr/bin/python3 /usr/local/bin/python` |
-| `ghproxy.net` 403 | Does not proxy `api.github.com` | Use direct GitHub API / Magisk download |
-| WSL background clone interrupted | `wsl.exe` exit kills children | Wrap `wsl.exe` with Bash tool `run_in_background=true` |
+| WLAN build `python: not found` | Build environment lacks `python` command | `ln -sf /usr/bin/python3 /usr/local/bin/python` |
 | `CONFIG_LSM` contains `bpf` error | xpeng tree has no `security/bpf` | Remove `bpf` from LSM string |
 | `DEFAULT_QDISC="fq"` not found | xpeng uses `DEFAULT_NET_SCH` | `NET_SCH_DEFAULT=y` + `DEFAULT_FQ=y` |
 | `NETFILTER_XT_TARGET_REJECT` not found | xpeng uses `IP_NF_TARGET_REJECT` | Use `IP_NF_TARGET_REJECT=y` |

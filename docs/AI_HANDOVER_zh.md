@@ -1,7 +1,7 @@
 # AI 交接文档（中文版）— xpeng_kernel_susfs
 
 > 本文档由 AI 编写，用于让**下一个 AI（或人类维护者）无需重新摸索**即可接管本仓库的
-> SUSFS + ReSukiSU + 可选模块内核编译任务。记录了本次适配的全部踩坑、根因、修复方法、
+> SUSFS + ReSukiSU + 可选模块内核编译任务。记录了内核移植与编译相关的踩坑、根因、修复方法、
 > GitHub Actions 编译流程和版本归档。
 > 
 > **本文档对应可用版本：2026-09-25 模块全开本地构建**，已在 Edge S30 刷机并成功开机。
@@ -107,52 +107,7 @@ GitHub Actions 的 ubuntu-22.04 runner 自带 `python`，所以 CI 不踩此坑�
 
 ---
 
-### 问题 #4（下载阻塞）：`ghproxy.net` 不代理 `api.github.com`，magiskboot 下载 403
-
-**现象**：
-
-```
-curl: (22) The requested URL returned error: 403
-```
-
-**根因**：脚本用 `ghproxy.net` 代理 `api.github.com` 获取 Magisk release，但该代理返回 403。
-
-**修复**：
-- 直接访问 GitHub API 取最新 tag
-- 直连下载 Magisk APK
-- 从 APK 中提取 `lib/x86_64/libmagiskboot.so` 作为 `magiskboot`
-
-参考脚本：`tools/get_magiskboot.sh`
-
----
-
-### 问题 #5（WSL 进程管理）：后台 `nohup ... &` 进程在 `wsl.exe` 退出时被杀
-
-**根因**：`wsl.exe` 调用结束时，其启动的登录 shell 及子进程会被终止，`nohup` 也保不住。
-
-**处置**：
-- 长任务必须用 **Bash 工具 `run_in_background=true` 包住 `wsl.exe` 调用**
-- 不要依赖 `nohup ... &` 跨 `wsl.exe` 会话保活
-
----
-
-### 问题 #6（代理无效）：Windows 代理无法自动被 WSL git 使用
-
-**现象**：用户挂了 Windows 代理，但 WSL 里 `git clone` 仍然直连，速度慢/断流。
-
-**根因**：
-- WSL2 是 NAT 网络，`127.0.0.1` 是 WSL 自己的回环，不是 Windows
-- WSL 里没有 `http_proxy`/`https_proxy` 环境变量，git 也没配代理
-- Windows 系统代理可能是关闭的
-- 代理客户端没开 Allow LAN，WSL 连不到 Windows 网关上的代理端口
-
-**处置**：
-- 最快方案：直接用 `ghproxy.net` 镜像（实测 ~2.7 MB/s，稳定）
-- 若必须走代理：客户端开 Allow LAN，WSL 里 `export https_proxy=http://<Windows网关IP>:端口`
-
----
-
-### 问题 #7（配置合并）：DroidSpaces 与 SYSVIPC 的 FCM 冲突
+### 问题 #4（配置合并）：DroidSpaces 与 SYSVIPC 的 FCM 冲突
 
 **现象**：DroidSpaces 某些配置要求 `CONFIG_SYSVIPC=y`，但 xpeng 基线中它是关的。
 
@@ -165,7 +120,7 @@ curl: (22) The requested URL returned error: 403
 
 ---
 
-### 问题 #8（BBGuard LSM）：`CONFIG_LSM` 字符串格式与校验
+### 问题 #5（BBGuard LSM）：`CONFIG_LSM` 字符串格式与校验
 
 **现象**：开启 BBGuard 后内核启动 LSM 注册失败，或 `.config` 中 `CONFIG_LSM` 被错误覆盖。
 
@@ -240,9 +195,10 @@ sha="${KERNEL_DIR}/scripts/config"
 
 ### 环境
 
-- Windows 11 + WSL2 `Ubuntu-22.04`
+- 主机系统：Ubuntu 22.04（或等效 Linux 容器/虚拟机）
 - 16 核 / 7.4G RAM + 9G swap
-- `/root/xpeng-build`（编译仓库）+ `/root/kernel-src`（内核源码）
+- 编译仓库路径：`/root/xpeng-build`
+- 内核源码路径：`/root/kernel-src`
 
 ### 步骤
 
@@ -284,9 +240,7 @@ export KERNEL_BRANCH=5.4.302-s3rxc32.33-8-25-susfs-modules
 | 症状 | 原因 | 处置 |
 |------|------|------|
 | 刷入后卡开机 | 旧 `-modules-nosec` 分支 BBRv3 不兼容 | 用新 `susfs-modules` 分支 |
-| WLAN 编译报 `python: not found` | WSL 无 `python` 命令 | `ln -sf /usr/bin/python3 /usr/local/bin/python` |
-| `ghproxy.net` 403 | 它不透传 `api.github.com` | GitHub API / Magisk 下载走直连 |
-| WSL 后台 clone 被中断 | `wsl.exe` 退出杀子进程 | Bash 工具 `run_in_background=true` 包 `wsl.exe` |
+| WLAN 编译报 `python: not found` | 构建环境缺少 `python` 命令 | `ln -sf /usr/bin/python3 /usr/local/bin/python` |
 | `CONFIG_LSM` 含 `bpf` 报错 | xpeng 树无 `security/bpf` | 从 LSM 串中去掉 `bpf` |
 | `DEFAULT_QDISC="fq"` 找不到 | xpeng 用 `DEFAULT_NET_SCH` | `NET_SCH_DEFAULT=y` + `DEFAULT_FQ=y` |
 | `NETFILTER_XT_TARGET_REJECT` 找不到 | xpeng 用 `IP_NF_TARGET_REJECT` | 换成 `IP_NF_TARGET_REJECT=y` |
