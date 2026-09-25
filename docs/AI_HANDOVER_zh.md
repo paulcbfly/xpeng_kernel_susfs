@@ -24,6 +24,7 @@ Motorola xpeng（Edge S30 / G200，代号 xpeng，**5.4 内核**）的编译脚�
 | `paulcbfly/xpeng_kernel_susfs` | **编译仓库**：build 脚本 + GitHub Actions workflow | `5.4.302-s3rxc32.33-8-25-ReSukiSU` |
 | `paulcbfly/android_kernel_motorola_xpeng` | 内核源码 + 全部适配 commit | `5.4.302-s3rxc32.33-8-25-susfs-modules` |
 | `paulcbfly/android_kernel_motorola_xpeng` | 内核源码 + 适配 commit + 从 sm8250 反向移植的 CVE 补丁 | `5.4.302-s3rxc32.33-8-25-susfs-modules-cve` |
+| `paulcbfly/android_kernel_motorola_xpeng` | 内核源码 + CVE 补丁 + **从 AstideLabs sm8250 4.19 反向移植的 SUSFS v2.3**（实验性，尚未编译/刷机验证） | `5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3-astide` |
 
 - 编译仓库**不含内核源码**，workflow 运行时 `git clone` 内核仓库指定分支。
 - 内核分支 `5.4.302-s3rxc32.33-8-25-susfs-modules`：
@@ -37,6 +38,11 @@ Motorola xpeng（Edge S30 / G200，代号 xpeng，**5.4 内核**）的编译脚�
     - `80220337b` — rtmutex：CVE-2026-43499 / CVE-2026-53163
     - `ed2922c53` — kgsl：对齐值符号扩展问题（CVE-2026-21385）
     - `67040a1d4` — kgsl：perfcounter 动态列表缓冲区溢出（CVE-2025-59600）
+- 内核分支 `5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3-astide`：
+  - 基于 `susfs-modules-cve`
+  - + SUSFS v2.3 核心文件替换（来自 `AstideLabs/android_kernel_xiaomi_sm8250` commit `0b8a115ddd41`）
+  - + hook 点适配：`proc_namespace.c`、`proc/fd.c`、`proc/task_mmu.c`、`statfs.c`
+  - 状态：**尚未进行完整编译/刷机验证**
 - 子模块：`KernelSU` → ReSukiSU @ `59c99fdf`（固定，SUSFS v2.2.0 兼容）
 
 ### 关键文件修改点（编译仓库）
@@ -257,11 +263,13 @@ export KERNEL_BRANCH=5.4.302-s3rxc32.33-8-25-susfs-modules
 
 ## 7. 未来升级路径
 
-### 升级 SUSFS v2.3.0 / 最新 ReSukiSU — 在 xpeng 5.4.302 上已放弃
+### 升级 SUSFS v2.3.0 / 最新 ReSukiSU — 第二次尝试进行中
 
-已尝试移植 v2.3：用 `bcrtvkcs/susfs4ksu@gki-android16-5.4` 的参考文件替换 `fs/susfs.c`、`include/linux/susfs.h`、`include/linux/susfs_def.h`，并对树里残留的 v2.2 hook 加兼容 stub。编译通过，但刷入 Edge S30 后**卡第一屏反复重启**。在没有串口的情况下无法确认是新 AS_FLAGS 路径隐藏逻辑的问题，还是 ReSukiSU latest 期望了 5.4 参考未提供的 API。
+第一次尝试使用 `bcrtvkcs/susfs4ksu@gki-android16-5.4` 的参考文件替换 `fs/susfs.c`、`include/linux/susfs.h`、`include/linux/susfs_def.h`，并对 v2.2 hook 加兼容 stub，编译通过但刷入 Edge S30 后**卡第一屏反复重启**，已废弃并删除。
 
-**结论**：xpeng 5.4.302 不再支持 SUSFS v2.3。保持 SUSFS v2.2 + 已验证可开机的 pinned ReSukiSU。workflow 中不再提供 `susfs_version: 2.3` 选项。
+第二次尝试改用 `AstideLabs/android_kernel_xiaomi_sm8250`（基于 4.19.y）的 commit `0b8a115ddd41` 作为 SUSFS v2.3 核心来源，并把 hook 点（`proc_namespace.c`、`proc/fd.c`、`proc/task_mmu.c`、`statfs.c`）迁移到 v2.3 API。AstideLabs 仓库随后用 `616911eb2dc9` 回退了 `susfs_inline_hook` 方式的 KernelSU 集成（`a7d3ad67a9d5`），因此 xpeng  port 保持现有 ReSukiSU 集成不变。
+
+**状态**：核心 + hook 更新已推送到 `5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3-astide`；**尚未进行完整编译/刷机验证**。本地完整编译需用户明确同意（约 40 分钟）。
 
 ### 新增模块
 

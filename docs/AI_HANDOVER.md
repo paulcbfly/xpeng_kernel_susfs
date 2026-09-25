@@ -23,6 +23,7 @@ Motorola **xpeng** (Edge S30 / G200, **5.4 kernel**) build script repo with
 | `paulcbfly/xpeng_kernel_susfs` | **Build repo**: scripts + GitHub Actions workflow | `5.4.302-s3rxc32.33-8-25-ReSukiSU` |
 | `paulcbfly/android_kernel_motorola_xpeng` | Kernel source + all adaptation commits | `5.4.302-s3rxc32.33-8-25-susfs-modules` |
 | `paulcbfly/android_kernel_motorola_xpeng` | Kernel source + adaptation commits + CVE backports from sm8250 | `5.4.302-s3rxc32.33-8-25-susfs-modules-cve` |
+| `paulcbfly/android_kernel_motorola_xpeng` | Kernel source + CVE backports + **SUSFS v2.3 backport from AstideLabs sm8250 4.19** (experimental, not yet boot-tested) | `5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3-astide` |
 
 - The build repo does **not** contain kernel sources; the workflow clones the kernel repo at build time.
 - Kernel branch `5.4.302-s3rxc32.33-8-25-susfs-modules`:
@@ -36,6 +37,11 @@ Motorola **xpeng** (Edge S30 / G200, **5.4 kernel**) build script repo with
     - `80220337b` — rtmutex: CVE-2026-43499 / CVE-2026-53163
     - `ed2922c53` — kgsl: sign extension on alignments (CVE-2026-21385)
     - `67040a1d4` — kgsl: perfcounter dynamic list overflow (CVE-2025-59600)
+- Kernel branch `5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3-astide`:
+  - Based on `susfs-modules-cve`
+  - + SUSFS v2.3 core replacement from `AstideLabs/android_kernel_xiaomi_sm8250` commit `0b8a115ddd41`
+  - + Hook-point adaptations: `proc_namespace.c`, `proc/fd.c`, `proc/task_mmu.c`, `statfs.c`
+  - Status: **not yet verified by full build / boot test**
 - Submodule: `KernelSU` → ReSukiSU @ `59c99fdf` (pinned for SUSFS v2.2.0 compatibility)
 
 ### Key build-repo modifications
@@ -256,11 +262,13 @@ export KERNEL_BRANCH=5.4.302-s3rxc32.33-8-25-susfs-modules
 
 ## 7. Future upgrade paths
 
-### SUSFS v2.3.0 / latest ReSukiSU — ABANDONED on xpeng 5.4.302
+### SUSFS v2.3.0 / latest ReSukiSU — second attempt in progress
 
-A v2.3 port was attempted by replacing `fs/susfs.c`, `include/linux/susfs.h`, `include/linux/susfs_def.h` with the `bcrtvkcs/susfs4ksu@gki-android16-5.4` reference and adding backward-compat stubs for the v2.2 hooks still present in the tree. The build succeeded, but the resulting image **boot-loops at the first screen** on Edge S30. Without a serial console it is impossible to determine whether the failure is the new AS_FLAGS path-hiding logic or ReSukiSU latest expecting APIs the 5.4 reference does not provide.
+A first v2.3 port using `bcrtvkcs/susfs4ksu@gki-android16-5.4` (with backward-compat stubs for v2.2 hooks) compiled but **boot-looped at the first screen** on Edge S30, so it was abandoned and deleted.
 
-**Decision**: drop SUSFS v2.3 for xpeng 5.4.302. Stay on SUSFS v2.2 + the pinned ReSukiSU commit that is known to boot. Do not expose a `susfs_version: 2.3` workflow choice.
+A second attempt uses `AstideLabs/android_kernel_xiaomi_sm8250` (4.19.y-based) commit `0b8a115ddd41` for the SUSFS v2.3 core and adapts the hook points (`proc_namespace.c`, `proc/fd.c`, `proc/task_mmu.c`, `statfs.c`) to the v2.3 API. The AstideLabs repository also reverted its `susfs_inline_hook` KernelSU integration (`616911eb2dc9` reverts `a7d3ad67a9d5`), so the xpeng port keeps the existing ReSukiSU integration unchanged.
+
+**Status**: core + hook updates pushed to `5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3-astide`; **not yet verified by full build or boot test**. A full local build must be explicitly approved by the user because it takes ~40 min.
 
 ### Add new modules
 
