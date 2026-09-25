@@ -369,6 +369,9 @@ build_kernel() {
   export ARCH=arm64
   export KBUILD_BUILD_USER=github-actions
   export KBUILD_BUILD_HOST=resukisu-ci
+  # Use the kernel source HEAD commit date as the deterministic build timestamp
+  # so UTS_VERSION stays stable across rebuilds and matches the patch age.
+  export KBUILD_BUILD_TIMESTAMP="$(git -C "${KERNEL_DIR}" log -1 --format=%cd --date=format-local:'%a %b %e %H:%M:%S %Z %Y' 2>/dev/null || date)"
   export TARGET_BUILD_VARIANT TARGET_PRODUCT
 
   local hostcflags hostldflags
