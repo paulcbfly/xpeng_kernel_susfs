@@ -474,7 +474,7 @@ build_kernel() {
   ENABLE_REKERNEL="${ENABLE_REKERNEL:-true}"       # process/app detection (binder+signal hooks)
   ENABLE_DROIDSPACES="${ENABLE_DROIDSPACES:-true}" # IPC/namespaces/netfilter/tmpfs options
   ENABLE_BBGUARD="${ENABLE_BBGUARD:-true}"         # Baseband-guard telephony LSM
-  ENABLE_BBRV3="${ENABLE_BBRV3:-true}"             # BBRv3 TCP congestion control (built-in code; toggle = default CC)
+  ENABLE_BBRV3="${ENABLE_BBRV3:-true}"             # BBRv3 TCP CC (toggle = default CC bbr + default qdisc fq)
 
   local cfg="${OUT_DIR}/.config"
   local kc="${KERNEL_DIR}/scripts/config"
@@ -509,33 +509,33 @@ build_kernel() {
   fi
 
   # ---- BBRv3 ---------------------------------------------------------------
-  # IMPORTANT: this toggle must NOT change the system-wide default qdisc.
+  # Full BBRv3 experience, identical to the LuoJuly sm7325 upstream port:
+  #   * BBR compiled in AND selected as the default congestion control
+  #   * fq selected as the default qdisc (BBR's pacing needs it)
   #
-  # Setting CONFIG_DEFAULT_NET_SCH="fq" (via NET_SCH_DEFAULT + DEFAULT_FQ) makes
-  # fq the default qdisc for EVERY netdevice, including the rmnet/rmnet_data*
-  # interfaces that carry mobile data. fq enables per-flow pacing by default
-  # (rate_enable=1) and its rate model does not match rmnet's QMAP aggregation,
-  # so packets get paced to death and the device shows "signal present, mobile
-  # data on, but no connectivity". This was a real, user-visible regression.
+  # NOTE: an earlier attempt forced "cubic + pfifo_fast" here as a supposed fix
+  # for "mobile signal present but no data". That theory was WRONG — the real
+  # cause was tracked down via on-device logs to the RIL/QMI layer
+  # (SETUP_DATA_CALL -> cause=4100 / OEM_DCFAILCAUSE_4, cid=-1, no ifname), i.e.
+  # the modem never created the rmnet_data* bearer at all, which the qdisc
+  # settings cannot influence. That forced change has been reverted.
   #
-  # MMI's own baseline runs cubic + pfifo_fast. We keep that: the BBR code stays
-  # compiled in and selectable, but the default stays cubic. Users who want BBR
-  # can opt in at runtime:
-  #     sysctl -w net.core.default_qdisc=fq
-  #     sysctl -w net.ipv4.tcp_congestion_control=bbr
+  # Toggle ON  -> default CC = bbr, default qdisc = fq
+  # Toggle OFF -> MMI baseline (cubic, pfifo_fast)
+  #
+  # NOTE: CONFIG_DEFAULT_NET_SCH is a *string* symbol, so `--disable` cannot
+  # clear it. Always set it explicitly with --set-str to avoid a stale value
+  # from an earlier build surviving into the new .config.
   if [[ "${ENABLE_BBRV3}" == "true" ]]; then
-    # Compile BBR in and make it *available* — but leave the default on cubic.
     "${kc}" --file "${cfg}" --enable TCP_CONG_BBR || true
-    "${kc}" --file "${cfg}" --set-str DEFAULT_TCP_CONG cubic || true
-    "${kc}" --file "${cfg}" --disable DEFAULT_BBR || true
-    # Disable the fq-as-default machinery entirely, and clear a stale string
-    # value left behind by earlier builds (DEFAULT_NET_SCH is a string symbol,
-    # so --disable cannot touch it).
-    "${kc}" --file "${cfg}" --disable NET_SCH_DEFAULT || true
-    "${kc}" --file "${cfg}" --disable DEFAULT_FQ || true
-    "${kc}" --file "${cfg}" --set-str DEFAULT_NET_SCH pfifo_fast || true
+    "${kc}" --file "${cfg}" --enable DEFAULT_BBR || true
+    "${kc}" --file "${cfg}" --set-str DEFAULT_TCP_CONG bbr || true
+    "${kc}" --file "${cfg}" --enable NET_SCH_FQ || true
+    "${kc}" --file "${cfg}" --enable NET_SCH_DEFAULT || true
+    "${kc}" --file "${cfg}" --enable DEFAULT_FQ || true
+    "${kc}" --file "${cfg}" --set-str DEFAULT_NET_SCH fq || true
   else
-    # Toggle off: identical MMI baseline (cubic + pfifo_fast).
+    # MMI baseline: cubic + pfifo_fast (built-in BBRv3 code stays unselected).
     "${kc}" --file "${cfg}" --set-str DEFAULT_TCP_CONG cubic || true
     "${kc}" --file "${cfg}" --disable DEFAULT_BBR || true
     "${kc}" --file "${cfg}" --disable NET_SCH_DEFAULT || true
@@ -834,7 +834,7 @@ ${susfs_note}
 | **Re:Kernel** v8.5 (进程/应用检测, binder+signal hook) | ${mod_rekernel} |
 | **DroidSpaces** (IPC/PID 命名空间, netfilter/IP_SET, tmpfs ACL) | ${mod_droidspaces} |
 | **BBGuard** (Baseband-guard 基带防格机 LSM) | ${mod_bbguard} |
-| **BBRv3** (TCP 拥塞控制升级，默认 CC 仍为 cubic + pfifo_fast) | ${mod_bbrv3} |
+| **BBRv3** (TCP 拥塞控制升级，默认 CC = bbr + fq pacing) | ${mod_bbrv3} |
 
 ## HOW TO USE
 

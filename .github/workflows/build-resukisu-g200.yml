@@ -43,7 +43,7 @@ on:
         default: true
         type: boolean
       enable_bbrv3:
-        description: "BBRv3 TCP congestion control (built-in code; default CC stays cubic, default qdisc stays pfifo_fast)"
+        description: "BBRv3 TCP congestion control (default CC = bbr, default qdisc = fq)"
         required: false
         default: true
         type: boolean

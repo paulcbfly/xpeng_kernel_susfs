@@ -31,9 +31,10 @@ Motorola xpeng（Edge S30 / G200，代号 xpeng，**5.4 内核**）的编译脚�
   - 基座 = 上游 `5.4.302-s3rxc32.33-8-25`
   - + SUSFS 适配 commit `b3ecce7eb`（SUSFS v2.2.0 + ReSukiSU 子模块 pin 59c99fdf）
   - + 四模块移植 commit `8972cd10c`（Re:Kernel / DroidSpaces / BBGuard / BBRv3）
-  - + ~~fq 默认 qdisc commit `b565fa013`~~ → **已回退**（`38c3f9630`）：
-    默认 qdisc 改回 `pfifo_fast`，`DEFAULT_TCP_CONG` 改回 `cubic`。
-    原因见下方「默认 qdisc」警告（曾导致移动数据无网）。
+  - + fq 默认 qdisc commit `b565fa013`（BBRv3 pacing）
+  - ⚠️ `38c3f9630`（强制 cubic + pfifo_fast）**已被 `41e51dac3` 回退** ——
+    当时误判是它导致移动数据无网；真因在 RIL/QMI 层，与 qdisc 无关。
+    现状：保持上游原样，默认 `bbr` + `fq`。
 - 内核分支 `5.4.302-s3rxc32.33-8-25-susfs-modules-cve`：
   - 与 `susfs-modules` 相同
   - + 从 `liyafe1997/kernel_xiaomi_sm8250_mod` 反向移植的安全补丁：
@@ -89,28 +90,31 @@ sm7325 是 lineage 内核，xpeng 是 MMI 内核，不能直接 `git apply`。
 | sm7325 原做法 | xpeng 树实际情况 | 调整 |
 |---|---|---|
 | defconfig 目标 = `lineage_xpeng.config` | MMI 用 `ext_config/moto-lahaina-xpeng.config` 片段 | 改写到 `ext_config/moto-lahaina-xpeng.config` |
-| `CONFIG_DEFAULT_QDISC="fq"` | 只有 `CONFIG_DEFAULT_NET_SCH` | ⛔ **不要移植**（见下方「默认 qdisc」警告） |
+| `CONFIG_DEFAULT_QDISC="fq"` | 只有 `CONFIG_DEFAULT_NET_SCH` | 用 `NET_SCH_DEFAULT=y` + `DEFAULT_FQ=y` + `--set-str DEFAULT_NET_SCH fq` |
 | `NETFILTER_XT_TARGET_REJECT` | 只有 `IP_NF_TARGET_REJECT` | 换成 `IP_NF_TARGET_REJECT=y` |
 | CONFIG_LSM 含 `bpf` | 本树无 `security/bpf` | 去掉 `bpf` |
 | `CONFIG_TCP_ECN=y` | 5.4 主线无此符号 | 跳过 |
 | `TCP_CONG_BRUTAL` | 两棵树都没有源码 | 跳过 |
 
-> ### ⛔ 默认 qdisc 必须是 `pfifo_fast`，不要设成 `fq`
+> ### ⚠️ 默认 qdisc：`fq` 是正常且期望的（2026-09-27 纠正）
 >
-> sm7325 的 `CONFIG_DEFAULT_QDISC="fq"` **不能照搬**。`fq` 是**全局默认 qdisc**，
-> 会作用到 `rmnet0`/`rmnet_data*` 等移动数据接口；它默认开启 per-flow pacing
-> (`rate_enable=1`)，速率模型与 rmnet 的 QMAP 聚合不兼容，结果是**手机有信号、
-> 数据开关也是开的，但完全没网**。这是 2026-09-26 实际发生并修复过的回归。
+> 2026-09-26 曾误判「`fq` 默认 qdisc 导致移动数据没网」，并强制改成
+> `cubic` + `pfifo_fast`。**该结论已被真机日志推翻，改动已回退**
+> （内核 `41e51dac3` / `a7fdc11b1`，构建脚本回退）。
 >
-> 保持 MMI 原厂基线 **cubic + pfifo_fast**；BBR 代码可以编译进去（`CONFIG_TCP_CONG_BBR=y`），
-> 但**不做默认**。用户想要 BBR 时自行 `sysctl -w net.core.default_qdisc=fq`。
+> **真因**：RIL/QMI 层数据呼叫建立失败 ——
+> `SETUP_DATA_CALL` 返回 `cause=4100` / `OEM_DCFAILCAUSE_4`、`cid=-1`、
+> `ifname=` 为空，即**调制解调器从未创建 `rmnet_data*` 承载**。
+> 该故障发生在**内核网络栈之下**，与 qdisc / TCP 拥塞控制**无关**。
 >
-> 两个易踩的坑：
-> 1. `CONFIG_DEFAULT_NET_SCH` 是 **string** 符号，`scripts/config --disable` **对它无效**，
->    必须 `--set-str DEFAULT_NET_SCH pfifo_fast` 显式重置；
-> 2. **只改内核 defconfig 不够** —— `scripts/ci/build_resukisu_boot.sh` 的 `ENABLE_BBRV3`
->    分支会用 `scripts/config` 覆盖 `.config`，**必须两边同步改**，否则白改。
->    改完用 `tools/e2e_qdisc_check.sh` 验证。
+> **因此**：BBRv3 保持**上游原样** —— 默认 `CONFIG_DEFAULT_TCP_CONG="bbr"` +
+> `CONFIG_DEFAULT_NET_SCH="fq"`。
+>
+> 唯一仍需注意的实现细节：
+> 1. `CONFIG_DEFAULT_NET_SCH` 是 **string** 符号，`scripts/config --disable`
+>    **对它无效**，必须 `--set-str DEFAULT_NET_SCH <值>` 显式设置；
+> 2. **只改内核 defconfig 不够** —— `scripts/ci/build_resukisu_boot.sh` 的
+>    `ENABLE_BBRV3` 分支会用 `scripts/config` 覆盖 `.config`，必须两边同步。
 
 **移植方法**：
 - 新增/修改文件纯净时可用 `git apply --include=...` 提取特定路径
@@ -274,10 +278,10 @@ export KERNEL_BRANCH=5.4.302-s3rxc32.33-8-25-susfs-modules
 | 症状 | 原因 | 处置 |
 |------|------|------|
 | 刷入后卡开机 | 旧 `-modules-nosec` 分支 BBRv3 不兼容 | 用新 `susfs-modules` 分支 |
-| **有信号但移动数据没网** | **`DEFAULT_NET_SCH="fq"` 作用于 rmnet，见上方「默认 qdisc」警告** | **`DEFAULT_TCP_CONG=cubic` + `DEFAULT_NET_SCH=pfifo_fast`** |
+| **有信号但移动数据没网** | **RIL/QMI 数据呼叫被拒（`cause=4100`/`OEM_DCFAILCAUSE_4`，`cid=-1`，无 `ifname`）→ 未创建 `rmnet_data*`** | **与 qdisc/TCP 无关；查 QMI/Modem 侧（见 `输出/移动数据诊断报告.md`）** |
 | WLAN 编译报 `python: not found` | 构建环境缺少 `python` 命令 | `ln -sf /usr/bin/python3 /usr/local/bin/python` |
 | `CONFIG_LSM` 含 `bpf` 报错 | xpeng 树无 `security/bpf` | 从 LSM 串中去掉 `bpf` |
-| `DEFAULT_QDISC="fq"` 找不到 | xpeng 用 `DEFAULT_NET_SCH` | ⛔ **改用 `--set-str DEFAULT_NET_SCH pfifo_fast`**（不要设 fq） |
+| `DEFAULT_QDISC="fq"` 找不到 | xpeng 用 `DEFAULT_NET_SCH` | 用 `NET_SCH_DEFAULT=y` + `DEFAULT_FQ=y` + `--set-str DEFAULT_NET_SCH fq` |
 | `NETFILTER_XT_TARGET_REJECT` 找不到 | xpeng 用 `IP_NF_TARGET_REJECT` | 换成 `IP_NF_TARGET_REJECT=y` |
 | `drivers/net/rekernel/Kconfig` 不存在 | 旧 netlink 版残留 | 删 `drivers/net/Kconfig` + `Makefile` 引用 |
 
