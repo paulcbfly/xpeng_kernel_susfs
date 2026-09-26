@@ -23,7 +23,7 @@ Motorola **xpeng** (Edge S30 / G200, **5.4 kernel**) build script repo with
 | `paulcbfly/xpeng_kernel_susfs` | **Build repo**: scripts + GitHub Actions workflow | `5.4.302-s3rxc32.33-8-25-ReSukiSU` |
 | `paulcbfly/android_kernel_motorola_xpeng` | Kernel source + all adaptation commits | `5.4.302-s3rxc32.33-8-25-susfs-modules` |
 | `paulcbfly/android_kernel_motorola_xpeng` | Kernel source + adaptation commits + CVE backports from sm8250 | `5.4.302-s3rxc32.33-8-25-susfs-modules-cve` |
-| `paulcbfly/android_kernel_motorola_xpeng` | Kernel source + CVE backports + **SUSFS v2.3 backport from AstideLabs sm8250 4.19** (experimental, not yet boot-tested) | `5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3-astide` |
+| `paulcbfly/android_kernel_motorola_xpeng` | Kernel source + CVE backports + **SUSFS v2.3 backport from AstideLabs sm8250** (full build passed, boot test pending) | `5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3-astide` |
 
 - The build repo does **not** contain kernel sources; the workflow clones the kernel repo at build time.
 - Kernel branch `5.4.302-s3rxc32.33-8-25-susfs-modules`:
@@ -40,8 +40,10 @@ Motorola **xpeng** (Edge S30 / G200, **5.4 kernel**) build script repo with
 - Kernel branch `5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3-astide`:
   - Based on `susfs-modules-cve`
   - + SUSFS v2.3 core replacement from `AstideLabs/android_kernel_xiaomi_sm8250` commit `0b8a115ddd41`
-  - + Hook-point adaptations: `proc_namespace.c`, `proc/fd.c`, `proc/task_mmu.c`, `statfs.c`
-  - Status: **not yet verified by full build / boot test**
+  - + Hook-point adaptation, pass 1 (`a2c9002c4`): `proc_namespace.c`, `proc/fd.c`, `proc/task_mmu.c`, `statfs.c`
+  - + Hook-point adaptation, pass 2 (`4ac98a8fc`): `fs/stat.c`, `fs/notify/fdinfo.c`, `fs/statfs.c`, `fs/readdir.c`
+  - Status: **full build passed** (`RC=0`, zero `ERROR:`), artifact vermagic `5.4.302-moto-g4ac98a8fc25c-dirty`,
+    boot test pending. Artifacts in `D:\githubs30\output\2026-09-26-v23\`.
 - Submodule: `KernelSU` → ReSukiSU @ `59c99fdf` (pinned for SUSFS v2.2.0 compatibility)
 
 ### Key build-repo modifications
@@ -298,7 +300,21 @@ A second attempt uses `AstideLabs/android_kernel_xiaomi_sm8250` (4.19.y-based) c
 
 **Note**: all 26 upstream SUS_PATH hunks in `fs/readdir.c` were already present in the baseline (the base branch already hooked all 5 readdir variants); this pass only realigned the include position with upstream. No behavioural change.
 
-**Status**: core + all hook updates pushed; **not yet verified by full build or boot test**. A full local build must be explicitly approved by the user because it takes ~40 min.
+**Status**: core + all hook updates pushed; **full build passed** (`RC=0`, zero `ERROR:`) with artifacts in `D:\githubs30\output\2026-09-26-v23\`; **boot test still pending**.
+
+#### Full build verification (2026-09-26 10:29, `RC=0`)
+
+| Check | Result |
+|---|---|
+| `ERROR:` count in build log | **0** |
+| Image vermagic | `5.4.302-moto-g4ac98a8fc25c-dirty` |
+| Three WLAN ko vermagic | byte-for-byte identical to Image ✅ |
+| `boot_ksu.img` kernel vs `Image` | sha256 **identical** (`daa3c852…`) ✅ |
+| v2.3 symbols present in Image | 6/6 **PRESENT** ✅ |
+
+Confirmed v2.3 symbols: `susfs_is_inode_sus_kstat`, `susfs_sus_kstat_spoof_generic_fillattr`, `…_spoof_inotify_fdinfo`, `…_spoof_proc_fd_seq_show`, `…_spoof_show_map_vma`, `…_spoof_vfs_statfs`.
+
+Verification scripts: `tools/verify_v23_release.sh`, `tools/verify_v23_wlan.sh`, `tools/verify_v23_symbols.sh`, `tools/export_v23.sh`.
 
 ### Add new modules
 

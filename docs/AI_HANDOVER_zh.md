@@ -24,7 +24,7 @@ Motorola xpeng（Edge S30 / G200，代号 xpeng，**5.4 内核**）的编译脚�
 | `paulcbfly/xpeng_kernel_susfs` | **编译仓库**：build 脚本 + GitHub Actions workflow | `5.4.302-s3rxc32.33-8-25-ReSukiSU` |
 | `paulcbfly/android_kernel_motorola_xpeng` | 内核源码 + 全部适配 commit | `5.4.302-s3rxc32.33-8-25-susfs-modules` |
 | `paulcbfly/android_kernel_motorola_xpeng` | 内核源码 + 适配 commit + 从 sm8250 反向移植的 CVE 补丁 | `5.4.302-s3rxc32.33-8-25-susfs-modules-cve` |
-| `paulcbfly/android_kernel_motorola_xpeng` | 内核源码 + CVE 补丁 + **从 AstideLabs sm8250 4.19 反向移植的 SUSFS v2.3**（实验性，尚未编译/刷机验证） | `5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3-astide` |
+| `paulcbfly/android_kernel_motorola_xpeng` | 内核源码 + CVE 补丁 + **从 AstideLabs sm8250 反向移植的 SUSFS v2.3**（全量编译通过，待刷机验证） | `5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3-astide` |
 
 - 编译仓库**不含内核源码**，workflow 运行时 `git clone` 内核仓库指定分支。
 - 内核分支 `5.4.302-s3rxc32.33-8-25-susfs-modules`：
@@ -41,8 +41,10 @@ Motorola xpeng（Edge S30 / G200，代号 xpeng，**5.4 内核**）的编译脚�
 - 内核分支 `5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3-astide`：
   - 基于 `susfs-modules-cve`
   - + SUSFS v2.3 核心文件替换（来自 `AstideLabs/android_kernel_xiaomi_sm8250` commit `0b8a115ddd41`）
-  - + hook 点适配：`proc_namespace.c`、`proc/fd.c`、`proc/task_mmu.c`、`statfs.c`
-  - 状态：**尚未进行完整编译/刷机验证**
+  - + hook 点适配（第一轮 `a2c9002c4`）：`proc_namespace.c`、`proc/fd.c`、`proc/task_mmu.c`、`statfs.c`
+  - + hook 点适配（第二轮 `4ac98a8fc`）：`fs/stat.c`、`fs/notify/fdinfo.c`、`fs/statfs.c`、`fs/readdir.c`
+  - 状态：**全量编译通过（`RC=0`，零 `ERROR:`）**，产物 vermagic `5.4.302-moto-g4ac98a8fc25c-dirty`，
+    待刷机验证。产物见 `D:\githubs30\output\2026-09-26-v23\`。
 - 子模块：`KernelSU` → ReSukiSU @ `59c99fdf`（固定，SUSFS v2.2.0 兼容）
 
 ### 关键文件修改点（编译仓库）
@@ -299,7 +301,21 @@ export KERNEL_BRANCH=5.4.302-s3rxc32.33-8-25-susfs-modules
 
 **备注**：`fs/readdir.c` 的 26 个上游 SUS_PATH hunk 在基线里已全部存在（基础分支已给 5 个 readdir 变体加过 hook），本次只调整了 include 位置以对齐上游排版，无行为变化。
 
-**状态**：核心 + 全部 hook 更新已推送；**尚未进行完整编译/刷机验证**。本地完整编译需用户明确同意（约 40 分钟）。
+**状态**：核心 + 全部 hook 更新已推送，**全量编译已通过**（`RC=0`，零 `ERROR:`），产物在 `D:\githubs30\output\2026-09-26-v23\`；**待刷机验证**。
+
+#### 全量构建验证结果（2026-09-26 10:29，`RC=0`）
+
+| 校验项 | 结果 |
+|---|---|
+| 构建 `ERROR:` 计数 | **0** |
+| Image vermagic | `5.4.302-moto-g4ac98a8fc25c-dirty` |
+| 三个 WLAN ko vermagic | 与 Image **逐字一致** ✅ |
+| `boot_ksu.img` 内 kernel vs `Image` | sha256 **完全相同**（`daa3c852…`） ✅ |
+| v2.3 新增符号是否编入 Image | 6/6 **PRESENT** ✅ |
+
+v2.3 新增符号实测存在：`susfs_is_inode_sus_kstat`、`susfs_sus_kstat_spoof_generic_fillattr`、`…_spoof_inotify_fdinfo`、`…_spoof_proc_fd_seq_show`、`…_spoof_show_map_vma`、`…_spoof_vfs_statfs`。
+
+校验脚本：`tools/verify_v23_release.sh`、`tools/verify_v23_wlan.sh`、`tools/verify_v23_symbols.sh`、`tools/export_v23.sh`。
 
 ### 新增模块
 
