@@ -266,9 +266,39 @@ export KERNEL_BRANCH=5.4.302-s3rxc32.33-8-25-susfs-modules
 
 A first v2.3 port using `bcrtvkcs/susfs4ksu@gki-android16-5.4` (with backward-compat stubs for v2.2 hooks) compiled but **boot-looped at the first screen** on Edge S30, so it was abandoned and deleted.
 
-A second attempt uses `AstideLabs/android_kernel_xiaomi_sm8250` (4.19.y-based) commit `0b8a115ddd41` for the SUSFS v2.3 core and adapts the hook points (`proc_namespace.c`, `proc/fd.c`, `proc/task_mmu.c`, `statfs.c`) to the v2.3 API. The AstideLabs repository also reverted its `susfs_inline_hook` KernelSU integration (`616911eb2dc9` reverts `a7d3ad67a9d5`), so the xpeng port keeps the existing ReSukiSU integration unchanged.
+A second attempt uses `AstideLabs/android_kernel_xiaomi_sm8250` (4.19.y-based) commit `0b8a115ddd41` for the SUSFS v2.3 core and adapts the hook points to the v2.3 API. The AstideLabs repository also reverted its `susfs_inline_hook` KernelSU integration (`616911eb2dc9` reverts `a7d3ad67a9d5`), so the xpeng port keeps the existing ReSukiSU integration unchanged.
 
-**Status**: core + hook updates pushed to `5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3-astide`; **not yet verified by full build or boot test**. A full local build must be explicitly approved by the user because it takes ~40 min.
+#### Key v2.3 API changes (must understand)
+
+| v2.2 form | v2.3 form |
+|---|---|
+| `susfs_sus_kstat_spoof_generic_fillattr(inode, stat)` (2 args) | `susfs_sus_kstat_spoof_generic_fillattr(inode, stat, result_mask)` (3 args) |
+| spoof applied **unconditionally** inside `generic_fillattr()` | driven by `STATX_SUS_KSTAT` / `STATX_SUS_KSTAT_FUSE` bits on `result_mask`, set in `vfs_getattr_nosec()` |
+| — | new `susfs_is_inode_sus_kstat(inode, &is_fuse)` |
+| — | new `susfs_sus_kstat_spoof_inotify_fdinfo(&ino, &dev)` |
+| — | new `susfs_sus_kstat_spoof_proc_fd_seq_show(&mnt_id, &ino, dev)` |
+| — | new `susfs_sus_kstat_spoof_show_map_vma(inode, &dev, &ino)` |
+| — | new `susfs_sus_kstat_spoof_vfs_statfs(inode, buf, &is_fuse)` |
+
+`STATX_SUS_KSTAT` / `STATX_SUS_KSTAT_FUSE` are defined in `include/linux/susfs_def.h`.
+
+#### Commits (branch `5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3-astide`)
+
+| commit | content |
+|---|---|
+| `751b68d7e` | replace `fs/susfs.c`, `include/linux/susfs.h`, `include/linux/susfs_def.h` with the v2.3 core |
+| `a2c9002c4` | adapt hook points: `proc_namespace.c`, `proc/fd.c`, `proc/task_mmu.c`, `statfs.c` |
+| `4ac98a8fc` | complete coverage in `stat.c`, `statfs.c`, `notify/fdinfo.c`, `readdir.c` |
+
+#### Static verification (done)
+
+- Incremental build: `CC fs/readdir.o fs/stat.o fs/statfs.o fs/notify/fdinfo.o` -> **RC=0, no warnings**
+- Full symbol check: 86 `susfs_*` symbols, **0 MISSING**
+- The 3 newly referenced v2.3 APIs match the `fs/susfs.c` definitions byte-for-byte
+
+**Note**: all 26 upstream SUS_PATH hunks in `fs/readdir.c` were already present in the baseline (the base branch already hooked all 5 readdir variants); this pass only realigned the include position with upstream. No behavioural change.
+
+**Status**: core + all hook updates pushed; **not yet verified by full build or boot test**. A full local build must be explicitly approved by the user because it takes ~40 min.
 
 ### Add new modules
 

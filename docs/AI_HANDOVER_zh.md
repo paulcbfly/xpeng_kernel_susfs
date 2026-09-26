@@ -267,9 +267,39 @@ export KERNEL_BRANCH=5.4.302-s3rxc32.33-8-25-susfs-modules
 
 第一次尝试使用 `bcrtvkcs/susfs4ksu@gki-android16-5.4` 的参考文件替换 `fs/susfs.c`、`include/linux/susfs.h`、`include/linux/susfs_def.h`，并对 v2.2 hook 加兼容 stub，编译通过但刷入 Edge S30 后**卡第一屏反复重启**，已废弃并删除。
 
-第二次尝试改用 `AstideLabs/android_kernel_xiaomi_sm8250`（基于 4.19.y）的 commit `0b8a115ddd41` 作为 SUSFS v2.3 核心来源，并把 hook 点（`proc_namespace.c`、`proc/fd.c`、`proc/task_mmu.c`、`statfs.c`）迁移到 v2.3 API。AstideLabs 仓库随后用 `616911eb2dc9` 回退了 `susfs_inline_hook` 方式的 KernelSU 集成（`a7d3ad67a9d5`），因此 xpeng  port 保持现有 ReSukiSU 集成不变。
+第二次尝试改用 `AstideLabs/android_kernel_xiaomi_sm8250`（基于 4.19.y）的 commit `0b8a115ddd41` 作为 SUSFS v2.3 核心来源，并把 hook 点迁移到 v2.3 API。AstideLabs 仓库随后用 `616911eb2dc9` 回退了 `susfs_inline_hook` 方式的 KernelSU 集成（`a7d3ad67a9d5`），因此 xpeng port 保持现有 ReSukiSU 集成不变。
 
-**状态**：核心 + hook 更新已推送到 `5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3-astide`；**尚未进行完整编译/刷机验证**。本地完整编译需用户明确同意（约 40 分钟）。
+#### v2.3 的关键 API 变化（务必理解）
+
+| v2.2 写法 | v2.3 写法 |
+|---|---|
+| `susfs_sus_kstat_spoof_generic_fillattr(inode, stat)`（2 参） | `susfs_sus_kstat_spoof_generic_fillattr(inode, stat, result_mask)`（3 参） |
+| `generic_fillattr()` 内**无条件** spoof | 由 `vfs_getattr_nosec()` 按 `result_mask` 上的 `STATX_SUS_KSTAT` / `STATX_SUS_KSTAT_FUSE` 位驱动 |
+| 无 | 新增 `susfs_is_inode_sus_kstat(inode, &is_fuse)` |
+| 无 | 新增 `susfs_sus_kstat_spoof_inotify_fdinfo(&ino, &dev)` |
+| 无 | 新增 `susfs_sus_kstat_spoof_proc_fd_seq_show(&mnt_id, &ino, dev)` |
+| 无 | 新增 `susfs_sus_kstat_spoof_show_map_vma(inode, &dev, &ino)` |
+| 无 | 新增 `susfs_sus_kstat_spoof_vfs_statfs(inode, buf, &is_fuse)` |
+
+`STATX_SUS_KSTAT` / `STATX_SUS_KSTAT_FUSE` 定义在 `include/linux/susfs_def.h`。
+
+#### 已完成的 commit（分支 `5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3-astide`）
+
+| commit | 内容 |
+|---|---|
+| `751b68d7e` | 替换 `fs/susfs.c`、`include/linux/susfs.h`、`include/linux/susfs_def.h` 为 v2.3 核心 |
+| `a2c9002c4` | 适配 hub：`proc_namespace.c`、`proc/fd.c`、`proc/task_mmu.c`、`statfs.c` |
+| `4ac98a8fc` | 补齐 `stat.c`、`statfs.c`、`notify/fdinfo.c`、`readdir.c` |
+
+#### 静态验证结果（已完成）
+
+- 增量编译：`CC fs/readdir.o fs/stat.o fs/statfs.o fs/notify/fdinfo.o` → **RC=0，无 warning**
+- 全符号检查：86 个 `susfs_*` 符号，**0 个 MISSING**
+- 新引用的 3 个 v2.3 API 调用点签名与 `fs/susfs.c` 定义**逐字一致**
+
+**备注**：`fs/readdir.c` 的 26 个上游 SUS_PATH hunk 在基线里已全部存在（基础分支已给 5 个 readdir 变体加过 hook），本次只调整了 include 位置以对齐上游排版，无行为变化。
+
+**状态**：核心 + 全部 hook 更新已推送；**尚未进行完整编译/刷机验证**。本地完整编译需用户明确同意（约 40 分钟）。
 
 ### 新增模块
 
