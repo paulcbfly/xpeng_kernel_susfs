@@ -61,9 +61,18 @@ on:
 permissions:
   contents: write
 
+# Serialise builds for this device instead of replacing them.
+#
+# `cancel-in-progress: true` makes every new dispatch kill the build that is
+# already running. A full cold build takes ~50 minutes, so a perfectly healthy
+# run gets cancelled the moment you hit "Run workflow" again -- and it shows up
+# as a bare `cancelled` with a discarded log, which is easy to misread as a
+# runner failure. With `false` a new dispatch queues behind the running one.
+# A separate `concurrency` group is used per device, so edge-s30 and g200 can
+# still build in parallel.
 concurrency:
   group: build-resukisu-edge-s30-5.4.302
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -162,6 +171,8 @@ jobs:
           GCC_GIT_FALLBACK: https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
           GCC_GIT_FALLBACK_BRANCH: master-kernel-build-2021
         run: |
+          echo "=== disk before build ==="
+          df -h / /home 2>/dev/null || df -h
           chmod +x scripts/ci/build_resukisu_boot.sh \
             scripts/ci/pack_anykernel3.sh \
             scripts/ci/build_wlan_modules.sh \

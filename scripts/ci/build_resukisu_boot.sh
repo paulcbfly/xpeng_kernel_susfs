@@ -638,6 +638,11 @@ build_kernel() {
   # Run make with line-buffered output plus a background heartbeat, so a long
   # silent phase (syncconfig on a 65k-file tree, ccache cold start, ...) still
   # produces a visible tick every 30s instead of looking like a freeze.
+  #
+  # The heartbeat also reports free disk space: the runner has a fixed ~14 GB
+  # after the cleanup step, and a run that dies late with no artifacts and no
+  # retrievable log (GitHub returns BlobNotFound) is usually a resource kill,
+  # so having the trend on record is what makes that diagnosable afterwards.
   mk() {
     local label="$1"; shift
     local hb_pid
@@ -646,7 +651,7 @@ build_kernel() {
       while :; do
         sleep 30
         n=$(( n + 30 ))
-        echo "[hb] ${label}: still running (${n}s elapsed)"
+        echo "[hb] ${label}: still running (${n}s elapsed, disk free: $(df -h --output=avail . 2>/dev/null | tail -1 | tr -d ' '))"
       done
     ) &
     hb_pid=$!
