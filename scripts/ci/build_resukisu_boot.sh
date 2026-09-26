@@ -591,6 +591,11 @@ build_kernel() {
   # CC must be the absolute path to the wrapper (upstream does the same) — the
   # kernel's `CC = scripts/gcc-wrapper.py $(REAL_CC)` indirection would otherwise
   # re-enter the wrapper recursively.
+  #
+  # HOSTCC/HOSTLD deliberately stay on the REAL clang/ld.lld, exactly as upstream
+  # does. Pointing HOSTCC at the wrapper makes ccache recurse into itself while
+  # building the host tools (scripts/basic/fixdep etc.), which nests bash until
+  # it hits the 1000-level limit and the whole build dies.
   local cc_bin="${CCACHE_CC:-${CLANG}}"
   local ld_bin="${CCACHE_LD:-${LD_LLD}}"
   info "CC=${cc_bin}"
@@ -609,9 +614,9 @@ build_kernel() {
     DTC_EXT="${DTC_EXT}"
     DTC_OVERLAY_TEST_EXT="${UFDT_EXT}"
     CONFIG_BUILD_ARM64_DT_OVERLAY=y
-    HOSTCC="${cc_bin}"
+    HOSTCC="${CLANG}"
     HOSTAR="${LLVM_AR}"
-    HOSTLD="${ld_bin}"
+    HOSTLD="${LD_LLD}"
   )
 
   info "generate_defconfig vendor/lahaina-qgki_defconfig"
@@ -633,7 +638,7 @@ build_kernel() {
     KERN_OUT="${OUT_DIR}" \
     DTC_EXT="${DTC_EXT}" DTC_OVERLAY_TEST_EXT="${UFDT_EXT}" \
     CONFIG_BUILD_ARM64_DT_OVERLAY=y \
-    HOSTCC="${cc_bin}" HOSTAR="${LLVM_AR}" HOSTLD="${ld_bin}" \
+    HOSTCC="${CLANG}" HOSTAR="${LLVM_AR}" HOSTLD="${LD_LLD}" \
     TARGET_BUILD_VARIANT="${TARGET_BUILD_VARIANT}" \
     TARGET_PRODUCT="${TARGET_PRODUCT}" \
     "${KERNEL_DIR}/scripts/gki/generate_defconfig.sh" vendor/lahaina-qgki_defconfig
