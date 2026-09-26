@@ -30,7 +30,10 @@ Motorola **xpeng** (Edge S30 / G200, **5.4 kernel**) build script repo with
   - Base = upstream `5.4.302-s3rxc32.33-8-25`
   - + SUSFS commit `b3ecce7eb`
   - + 4-module port commit `8972cd10c` (Re:Kernel / DroidSpaces / BBGuard / BBRv3)
-  - + fq default qdisc commit `b565fa013`
+  - + ~~fq default qdisc commit `b565fa013`~~ → **reverted** by `38c3f9630`:
+    default qdisc back to `pfifo_fast`, `DEFAULT_TCP_CONG` back to `cubic`.
+    (`b565fa013` set `CONFIG_DEFAULT_NET_SCH="fq"` globally, which **broke mobile data**
+    on `rmnet0` / `rmnet_data*` — see the default-qdisc warning below.)
 - Kernel branch `5.4.302-s3rxc32.33-8-25-susfs-modules-cve`:
   - Same as `susfs-modules`
   - + CVE backports from `liyafe1997/kernel_xiaomi_sm8250_mod`:
@@ -86,11 +89,40 @@ sm7325 is a lineage kernel; xpeng is MMI. Do not blindly `git apply`.
 | sm7325 original | xpeng reality | Adjustment |
 |---|---|---|
 | defconfig target = `lineage_xpeng.config` | MMI uses `ext_config/moto-lahaina-xpeng.config` fragment | Rewrite to that fragment |
-| `CONFIG_DEFAULT_QDISC="fq"` | only `CONFIG_DEFAULT_NET_SCH` exists | use `NET_SCH_DEFAULT=y` + `DEFAULT_FQ=y` |
+| `CONFIG_DEFAULT_QDISC="fq"` | only `CONFIG_DEFAULT_NET_SCH` exists | ⛔ **do NOT port** (see the default-qdisc warning below) |
 | `NETFILTER_XT_TARGET_REJECT` | only `IP_NF_TARGET_REJECT` exists | use `IP_NF_TARGET_REJECT=y` |
 | CONFIG_LSM includes `bpf` | no `security/bpf` in tree | remove `bpf` from LSM string |
 | `CONFIG_TCP_ECN=y` | no such symbol in 5.4 mainline | skip |
 | `TCP_CONG_BRUTAL` | no source in either tree | skip |
+
+> ### ⛔ Default qdisc MUST be `pfifo_fast` — never `fq`
+>
+> **Symptom**: mobile signal present, mobile data toggled **on**, but **no internet**.
+>
+> **Root cause**: `CONFIG_DEFAULT_NET_SCH="fq"` is a **global** default qdisc
+> (`sch_default_qdisc()`, `net/sched/sch_api.c`) applied to **every** netdevice,
+> including `rmnet0` / `rmnet_data*`. `fq` enables per-flow pacing by default
+> (`q->rate_enable = 1` in `net/sched/sch_fq.c`), and that rate model is
+> incompatible with rmnet's QMAP aggregation → control plane fine, data plane dead.
+>
+> MMI's factory baseline is `cubic` + `pfifo_fast`. The original
+> `5.4.302-s3rxc32.33-8-25-susfs` branch had **none** of
+> `TCP_CONG_BBR` / `DEFAULT_TCP_CONG` / `DEFAULT_NET_SCH` / `NET_SCH_FQ` /
+> `DEFAULT_FQ` — they were all introduced by the port commits
+> (`8972cd10c` + `b565fa013`). Commit `b565fa013` was reverted in `38c3f9630`.
+>
+> **Rules**:
+> 1. Keep `CONFIG_TCP_CONG_BBR=y` (it is harmless — a selectable congestion
+>    control), but keep `CONFIG_DEFAULT_TCP_CONG="cubic"`.
+> 2. Never enable `CONFIG_NET_SCH_DEFAULT` / `CONFIG_DEFAULT_FQ`.
+> 3. `CONFIG_DEFAULT_NET_SCH` is a **string** symbol — `scripts/config --disable`
+>    is a **no-op** on it. Always reset it explicitly with
+>    `--set-str DEFAULT_NET_SCH pfifo_fast`.
+> 4. Fix **both** places: the kernel defconfig fragment
+>    (`arch/arm64/configs/vendor/ext_config/moto-lahaina-xpeng.config`) **and**
+>    the `ENABLE_BBRV3` branch in `scripts/ci/build_resukisu_boot.sh`, because the
+>    latter re-writes `.config` via `scripts/config` after defconfig.
+
 
 **Porting method**:
 - Use `git apply --include=...` for clean file additions
@@ -256,7 +288,8 @@ export KERNEL_BRANCH=5.4.302-s3rxc32.33-8-25-susfs-modules
 | Boot loop after flash | Old `-modules-nosec` branch BBRv3 incompatible | Use new `susfs-modules` branch |
 | WLAN build `python: not found` | Build environment lacks `python` command | `ln -sf /usr/bin/python3 /usr/local/bin/python` |
 | `CONFIG_LSM` contains `bpf` error | xpeng tree has no `security/bpf` | Remove `bpf` from LSM string |
-| `DEFAULT_QDISC="fq"` not found | xpeng uses `DEFAULT_NET_SCH` | `NET_SCH_DEFAULT=y` + `DEFAULT_FQ=y` |
+| `DEFAULT_QDISC="fq"` not found | xpeng uses `DEFAULT_NET_SCH` | ⛔ **use `--set-str DEFAULT_NET_SCH pfifo_fast`** — never `fq` |
+| **Mobile signal OK but no data** | **`DEFAULT_NET_SCH="fq"` applies globally to `rmnet`** | **`DEFAULT_TCP_CONG="cubic"` + `DEFAULT_NET_SCH="pfifo_fast"`** |
 | `NETFILTER_XT_TARGET_REJECT` not found | xpeng uses `IP_NF_TARGET_REJECT` | Use `IP_NF_TARGET_REJECT=y` |
 | `drivers/net/rekernel/Kconfig` missing | Stale netlink version reference | Remove from `drivers/net/Kconfig` + `Makefile` |
 
