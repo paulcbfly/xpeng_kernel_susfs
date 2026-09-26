@@ -216,6 +216,29 @@ no hard failure).
 **not** usable for xpeng 5.4.302, so the first build is necessarily cold (~40 min).
 The speedup shows up **from the second build onward**.
 
+#### Do kernel source changes invalidate the cache?
+
+A ccache key hashes "preprocessed source + compile flags + compiler identity",
+so **invalidation happens per translation unit (TU)**, not per kernel:
+
+| Change | Cache impact | Expected time |
+|---|---|---|
+| Edit 1-2 `.c` files | Only those TUs miss | seconds to ~1 min |
+| Add one new `.c` file | Only the new file compiles | same as above |
+| Edit a widely-included header | Every TU including it misses | minutes to tens of minutes |
+| Flip a `CONFIG_*` in `.config` | Every TU depending on that macro misses | close to a full rebuild |
+
+The takeaway: the everyday "edit a bit, rebuild" loop benefits most; toggling
+`CONFIG` options (Re:Kernel / BBRv3) is close to a cold build, which is expected.
+
+Two caveats:
+
+- `CCACHE_COMPILERCHECK="none"` means the compiler binary is **not** verified. The
+  toolchain is pinned to `clang-r383902b1` here, so that is acceptable; but if the
+  clang version is ever changed by hand, run once with `ENABLE_CCACHE=false` first.
+- The cache key includes `susfs_version` + branch name and `restore-keys` match by
+  prefix, so entries can be reused across branches of the same SUSFS version.
+
 ### Artifact naming
 
 ```
