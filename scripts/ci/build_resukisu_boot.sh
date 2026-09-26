@@ -834,7 +834,7 @@ ${susfs_note}
 | **Re:Kernel** v8.5 (进程/应用检测, binder+signal hook) | ${mod_rekernel} |
 | **DroidSpaces** (IPC/PID 命名空间, netfilter/IP_SET, tmpfs ACL) | ${mod_droidspaces} |
 | **BBGuard** (Baseband-guard 基带防格机 LSM) | ${mod_bbguard} |
-| **BBRv3** (TCP 拥塞控制升级 + fq pacing) | ${mod_bbrv3} |
+| **BBRv3** (TCP 拥塞控制升级，默认 CC 仍为 cubic + pfifo_fast) | ${mod_bbrv3} |
 
 ## HOW TO USE
 
