@@ -75,10 +75,15 @@ target_chip=(qca6750 qca6390 wlan)
 export ANDROID_BUILD_TOP="${BUILD_ROOT}"
 export PATH="$(dirname "${CLANG}"):${BUILD_ROOT}/bin:${PATH:-}"
 
+# When ccache-ECS is active, build_resukisu_boot.sh exports CCACHE_CC pointing
+# at the ccache wrapper; route WLAN compilation through it too so the cache is
+# shared between the main Image build and the vendor .ko builds.
+REAL_CC_BIN="${CCACHE_CC:-${CLANG}}"
+
 COMMON=(
   ARCH=arm64
   CROSS_COMPILE="${AARCH64_PREFIX}"
-  REAL_CC="${CLANG}"
+  REAL_CC="${REAL_CC_BIN}"
   CLANG_TRIPLE=aarch64-linux-gnu-
   AR="${LLVM_AR}"
   LLVM_NM="${LLVM_NM}"
@@ -87,7 +92,7 @@ COMMON=(
   DTC_EXT="${DTC_EXT}"
   DTC_OVERLAY_TEST_EXT="${UFDT_EXT}"
   CONFIG_BUILD_ARM64_DT_OVERLAY=y
-  HOSTCC="${CLANG}"
+  HOSTCC="${REAL_CC_BIN}"
   HOSTAR="${LLVM_AR}"
   HOSTLD="${LD_LLD}"
   WLAN_COMMON_ROOT=./qca-wifi-host-cmn

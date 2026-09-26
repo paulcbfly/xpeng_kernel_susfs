@@ -111,6 +111,7 @@ mkdir -p "${WORK_DIR}/boot" "${WORK_DIR}/release" "$(dirname "${KERNEL_DIR}")"
 log() { echo "::group::$1"; }
 endlog() { echo "::endgroup::"; }
 info() { echo "[+] $*"; }
+warn() { echo "[!] $*" >&2; }
 die() { echo "[!] $*" >&2; exit 1; }
 
 curl_get() {
@@ -362,6 +363,159 @@ setup_toolchain() {
 }
 
 # ---------------------------------------------------------------------------
+# 3b) ccache-ECS setup (compile cache; big speedup on repeat builds)
+#
+# Adapted from cctv18/oppo_oplus_realme_sm8850:
+#   - uses the ccache-ECS binary (a ccache fork with kernel-specific indexing)
+#   - libfakestat.so / libfaketimeMT.so hijack file mtimes and __DATE__/__TIME__
+#     so unrelated rebuilds keep hitting the same cache entries
+#
+# Masquerade mode: a directory of symlinks named `clang`/`clang++` is prepended
+# to PATH. ccache inspects argv[0] to find the real compiler, so the kernel's
+# own `clang` invocations are cached without touching the Makefile.
+#
+# Disable with ENABLE_CCACHE=false.
+# ---------------------------------------------------------------------------
+setup_ccache() {
+  ENABLE_CCACHE="${ENABLE_CCACHE:-true}"
+  if [[ "${ENABLE_CCACHE}" != "true" ]]; then
+    info "ENABLE_CCACHE=false; compile cache disabled"
+    return 0
+  fi
+
+  log "Setup ccache-ECS"
+
+  local ccache_asset_dir="${BUILD_ROOT}/scripts/ci/ccache-ecs"
+  local ccache_bin="${ccache_asset_dir}/ccache-x86-64"
+  local fakestat_so="${ccache_asset_dir}/libfakestat.so"
+  local faketime_so="${ccache_asset_dir}/libfaketimeMT.so"
+
+  # Fall back to downloading from the upstream reference repo if not vendored.
+  if [[ ! -f "${ccache_bin}" ]]; then
+    info "ccache binary not vendored; downloading from reference repo"
+    mkdir -p "${ccache_asset_dir}"
+    local base="https://github.com/cctv18/oppo_oplus_realme_sm8850/raw/refs/heads/main/lib"
+    curl_get -L -o "${ccache_bin}"    "${base}/ccache-x86-64"
+    curl_get -L -o "${fakestat_so}"   "${base}/libfakestat.so"
+    curl_get -L -o "${faketime_so}"   "${base}/libfaketimeMT.so"
+  fi
+  [[ -f "${ccache_bin}" ]] || die "ccache-ECS binary missing: ${ccache_bin}"
+  chmod +x "${ccache_bin}"
+
+  CCACHE_DIR="${CCACHE_DIR:-${HOME}/.ccache_xpeng}"
+  CCACHE_MAXSIZE="${CCACHE_MAXSIZE:-3G}"
+  mkdir -p "${CCACHE_DIR}"
+
+  # --- timeline pinning -----------------------------------------------------
+  # Fixed mtime / __DATE__ so cache keys do not churn between runs.
+  #
+  # The preload libs are prebuilt upstream and pinned to a specific glibc:
+  # libfakestat.so needs GLIBC_2.38 (__isoc23_sscanf), libfaketimeMT.so needs
+  # GLIBC_2.34. When the runner image is older than that, loading simply fails
+  # and *every* compile dies with a relocation error. Probe each library first
+  # and drop the ones that cannot be loaded, so a stale runner degrades to a
+  # lower hit rate instead of a hard build failure.
+  export FAKESTAT="${FAKESTAT:-2026-01-01 12:00:00}"
+  export FAKETIME="${FAKETIME:-@2026-01-01 13:00:00}"
+
+  probe_preload() {
+    local so="$1"
+    [[ -f "${so}" ]] || return 1
+    LD_PRELOAD="${so}" /bin/true >/dev/null 2>&1
+  }
+
+  local preload_libs=()
+  if probe_preload "${fakestat_so}"; then
+    preload_libs+=("${fakestat_so}")
+  else
+    warn "libfakestat.so cannot be loaded (needs GLIBC_2.38+); mtime pinning disabled"
+  fi
+  if probe_preload "${faketime_so}"; then
+    preload_libs+=("${faketime_so}")
+  else
+    warn "libfaketimeMT.so cannot be loaded; __DATE__/time() pinning disabled"
+  fi
+
+  if ((${#preload_libs[@]} == 0)); then
+    warn "no fake-time preload library usable; ccache will run without timeline pinning"
+  fi
+  export LD_PRELOAD_TMP="${preload_libs[*]:-}"
+
+  # --- ccache environment ---------------------------------------------------
+  export CCACHE_COMPILERCHECK="none"
+  # Normalise absolute paths so entries stay valid across different runners and
+  # workspace paths (GitHub uses /home/runner/work/... which can shift).
+  export CCACHE_BASEDIR="${CCACHE_BASEDIR:-$(dirname "${KERNEL_DIR}")}"
+  export CCACHE_NOHASHDIR="true"
+  export CCACHE_NOHARDLINK="true"
+  export CCACHE_DIR
+  export CCACHE_MAXSIZE
+  # ccache-ECS-specific switch: enables kernel-aware dependency indexing.
+  export CCACHE_IS_KERNEL_COMPILING="true"
+  export CCACHE_COMPRESS="true"
+
+  # sloppiness: tolerate mtime/ctime drift, __DATE__/__TIME__ macros and PCH.
+  # These are exactly the things the fake-time preload neutralises, so telling
+  # ccache to ignore them prevents spurious misses. `pch_defines` must come with
+  # `time_macros` per ccache docs.
+  local conf="${CCACHE_DIR}/ccache.conf"
+  if ! grep -q '^sloppiness' "${conf}" 2>/dev/null; then
+    printf '\nsloppiness = file_stat_matches,include_file_ctime,include_file_mtime,pch_defines,file_macro,time_macros\n' >> "${conf}"
+  fi
+
+  # --- masquerade wrappers --------------------------------------------------
+  # Each wrapper preloads the fake-time libs and hands off to ccache.
+  local masq_dir="${WORK_DIR}/ccache-masq"
+  rm -rf "${masq_dir}"
+  mkdir -p "${masq_dir}"
+  local real_clang="${CLANG}"
+  local real_dir
+  real_dir="$(dirname "${real_clang}")"
+
+  make_masq() {
+    local name="$1" real="$2"
+    cat > "${masq_dir}/${name}" <<WRAPPER
+#!/bin/bash
+export LD_PRELOAD="${LD_PRELOAD_TMP}"
+export FAKESTAT="${FAKESTAT}"
+export FAKETIME="${FAKETIME}"
+exec "${ccache_bin}" "${real}" "\$@"
+WRAPPER
+    chmod +x "${masq_dir}/${name}"
+  }
+
+  make_masq clang   "${real_dir}/clang"
+  make_masq clang++ "${real_dir}/clang++"
+  # CROSS_COMPILE-prefixed compilers also route through ccache.
+  make_masq "${AARCH64_PREFIX}clang" "${real_dir}/clang"
+
+  export PATH="${masq_dir}:${PATH}"
+  export CCACHE_MASQ_DIR="${masq_dir}"
+
+  # The kernel sets `CC = scripts/gcc-wrapper.py $(REAL_CC)`, so REAL_CC has to
+  # point straight at the ccache wrapper — putting the masquerade dir on PATH is
+  # not enough, because REAL_CC is passed as an absolute path.
+  CCACHE_CC="${masq_dir}/clang"
+  export CCACHE_CC
+
+  "${ccache_bin}" -M "${CCACHE_MAXSIZE}" >/dev/null 2>&1 || true
+  "${ccache_bin}" -o compression=true >/dev/null 2>&1 || true
+
+  local ccache_ver
+  ccache_ver="$("${ccache_bin}" --version 2>/dev/null | head -1 || true)"
+  info "ccache-ECS: ${ccache_ver}"
+  info "CCACHE_DIR=${CCACHE_DIR} CCACHE_MAXSIZE=${CCACHE_MAXSIZE}"
+  info "masquerade dir=${masq_dir}"
+  info "REAL_CC will be: ${CCACHE_CC}"
+  info "ccache stats (before build):"
+  "${ccache_bin}" -s 2>/dev/null || true
+
+  gh_env CCACHE_DIR "${CCACHE_DIR}"
+  gh_env CCACHE_MAXSIZE "${CCACHE_MAXSIZE}"
+  endlog
+}
+
+# ---------------------------------------------------------------------------
 # 4) Build kernel Image (Motorola GKI generate_defconfig flow)
 # ---------------------------------------------------------------------------
 apply_nfc_overlay() {
@@ -414,10 +568,15 @@ build_kernel() {
   hostcflags="-I${KERNEL_DIR}/include/uapi -I/usr/include -I/usr/include/x86_64-linux-gnu -I${KERNEL_DIR}/include -L/usr/lib -L/usr/lib/x86_64-linux-gnu -fuse-ld=lld"
   hostldflags="-L/usr/lib -L/usr/lib/x86_64-linux-gnu -fuse-ld=lld"
 
+  # When ccache-ECS is active, REAL_CC points at the ccache wrapper so every
+  # translation unit goes through the cache; otherwise it is the raw clang.
+  local real_cc="${CCACHE_CC:-${CLANG}}"
+  info "REAL_CC=${real_cc}"
+
   local common_make=(
     ARCH=arm64
     CROSS_COMPILE="${AARCH64_PREFIX}"
-    REAL_CC="${CLANG}"
+    REAL_CC="${real_cc}"
     CLANG_TRIPLE=aarch64-linux-gnu-
     AR="${LLVM_AR}"
     LLVM_NM="${LLVM_NM}"
@@ -426,7 +585,7 @@ build_kernel() {
     DTC_EXT="${DTC_EXT}"
     DTC_OVERLAY_TEST_EXT="${UFDT_EXT}"
     CONFIG_BUILD_ARM64_DT_OVERLAY=y
-    HOSTCC="${CLANG}"
+    HOSTCC="${real_cc}"
     HOSTAR="${LLVM_AR}"
     HOSTLD="${LD_LLD}"
   )
@@ -445,12 +604,12 @@ build_kernel() {
 
   MAKE_PATH= ARCH=arm64 \
     CROSS_COMPILE="${AARCH64_PREFIX}" \
-    REAL_CC="${CLANG}" CLANG_TRIPLE=aarch64-linux-gnu- \
+    REAL_CC="${real_cc}" CLANG_TRIPLE=aarch64-linux-gnu- \
     AR="${LLVM_AR}" LLVM_NM="${LLVM_NM}" LD="${LD_LLD}" NM="${LLVM_NM}" \
     KERN_OUT="${OUT_DIR}" \
     DTC_EXT="${DTC_EXT}" DTC_OVERLAY_TEST_EXT="${UFDT_EXT}" \
     CONFIG_BUILD_ARM64_DT_OVERLAY=y \
-    HOSTCC="${CLANG}" HOSTAR="${LLVM_AR}" HOSTLD="${LD_LLD}" \
+    HOSTCC="${real_cc}" HOSTAR="${LLVM_AR}" HOSTLD="${LD_LLD}" \
     TARGET_BUILD_VARIANT="${TARGET_BUILD_VARIANT}" \
     TARGET_PRODUCT="${TARGET_PRODUCT}" \
     "${KERNEL_DIR}/scripts/gki/generate_defconfig.sh" vendor/lahaina-qgki_defconfig
@@ -724,6 +883,7 @@ build_wlan_and_pack() {
   BUILD_ROOT="${BUILD_ROOT}" WORK_DIR="${WORK_DIR}" OUT_DIR="${OUT_DIR}" \
     WLAN_TAG="${WLAN_TAG}" JOBS="${JOBS}" \
     CLANG="${CLANG}" MAKE="${MAKE}" AARCH64_PREFIX="${AARCH64_PREFIX}" \
+    CCACHE_CC="${CCACHE_CC:-}" \
     LD_LLD="${LD_LLD}" LLVM_AR="${LLVM_AR}" LLVM_NM="${LLVM_NM}" \
     DTC_EXT="${DTC_EXT}" UFDT_EXT="${UFDT_EXT}" \
     bash "${wlan_script}"
@@ -873,6 +1033,29 @@ EOF
   info "Release notes written"
 }
 
+# ---------------------------------------------------------------------------
+# ccache-ECS hit/miss report (best-effort; never fails the build)
+# ---------------------------------------------------------------------------
+ccache_report() {
+  [[ "${ENABLE_CCACHE:-true}" == "true" ]] || return 0
+  local ccache_bin="${BUILD_ROOT}/scripts/ci/ccache-ecs/ccache-x86-64"
+  [[ -x "${ccache_bin}" ]] || return 0
+  log "ccache-ECS statistics"
+  "${ccache_bin}" -s 2>/dev/null || true
+  # Emit a compact summary into the job summary when running under Actions.
+  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    local stats
+    stats="$("${ccache_bin}" -s 2>/dev/null || true)"
+    {
+      echo "### ccache-ECS stats"
+      echo '```'
+      printf '%s\n' "${stats}"
+      echo '```'
+    } >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true
+  fi
+  endlog
+}
+
 main() {
   info "Variant=${VARIANT} Device=${DEVICE_TITLE} NFC=${ENABLE_NFC}"
   info "Kernel branch=${KERNEL_BRANCH} label=${KERNEL_VER_LABEL} ROM_ID=${ROM_ID}"
@@ -880,8 +1063,10 @@ main() {
   fetch_kernel
   update_resukisu
   setup_toolchain
+  setup_ccache
   if [[ "${SKIP_BUILD:-false}" != "true" ]]; then
     build_kernel
+    ccache_report
   else
     [[ -f "${WORK_DIR}/release/Image" || -f "${OUT_DIR}/arch/arm64/boot/Image" ]] \
       || die "SKIP_BUILD=true but Image not found"
@@ -893,6 +1078,7 @@ main() {
   fi
   # WiFi kos must track this Image's Module.symvers / vermagic
   build_wlan_and_pack
+  ccache_report
   ensure_boot_oem
   setup_magiskboot
   repack_boot
