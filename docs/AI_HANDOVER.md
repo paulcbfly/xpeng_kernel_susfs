@@ -161,18 +161,60 @@ gh run view <RUN_ID> --log-failed     # failed logs
 - Monthly schedule: UTC 00:00 1st (Edge S30), 02:00 1st (G200), all modules ON by default
 - Web trigger: Actions → Run workflow → check/uncheck modules
 
-### Workflow internals (40-60 min)
+### Workflow internals (40-60 min; much faster on repeat runs with ccache on)
 
 1. `actions/checkout` build repo `5.4.302-s3rxc32.33-8-25-ReSukiSU`
 2. Cache/download toolchain: `clang-r383902b1` (AOSP) + GCC 4.9 (Lineage 19.1) + magiskboot
-3. `build_resukisu_boot.sh`:
+3. `actions/cache/restore` restores the ccache-ECS cache (`~/.ccache_xpeng`)
+4. `build_resukisu_boot.sh`:
    - `fetch_kernel`: clone kernel fork `5.4.302-s3rxc32.33-8-25-susfs-modules` (--recursive)
    - `update_resukisu`: pin KernelSU submodule to `59c99fdf` (default)
-   - `setup_toolchain`, `build_kernel` (generate_defconfig → **module toggles** → olddefconfig → Image)
-   - `build_wlan_modules` (WiFi kos)
+   - `setup_toolchain`, `setup_ccache` (one-off prep, sub-second)
+   - `build_kernel` (generate_defconfig → **module toggles** → olddefconfig → Image)
+   - `ccache_report`: prints ccache hit stats into the job summary
+   - `build_wlan_modules` (WiFi kos, **sharing the same ccache**)
    - `repack_boot` (magiskboot packs boot_ksu.img)
    - `pack_anykernel3` (Image + WiFi kos, AK3 naming)
-4. Upload artifact + create GitHub Release (body lists module toggle states)
+5. `actions/cache/save` persists the ccache cache (only when not hit and `enable_ccache != false`)
+6. Upload artifact + create GitHub Release (body lists module toggle states)
+
+### ccache-ECS compile cache (optional, on by default)
+
+Ported from cctv18's ccache-ECS scheme to cut repeat-build time. Turn it off with
+`enable_ccache` (workflow input) or `ENABLE_CCACHE=false` (local).
+
+| Component | Purpose |
+|---|---|
+| `scripts/ci/ccache-ecs/ccache-x86-64` | ccache-ECS binary (vendored, no download needed) |
+| `scripts/ci/ccache-ecs/libfakestat.so` | Pins file mtime (hooks stat/open/openat/statx) |
+| `scripts/ci/ccache-ecs/libfaketimeMT.so` | Pins `__DATE__`/`__TIME__`/`clock_gettime` |
+
+**How it works**: `setup_ccache()` builds a masquerade dir holding wrappers named
+`clang`/`clang++`; each wrapper `LD_PRELOAD`s the fake-time libs before exec'ing ccache.
+Cache lives in `~/.ccache_xpeng` (3G max); the key contains `susfs_version` + branch +
+run_id, with prefix-based restore-keys.
+
+**Critical constraint**: the kernel Makefile sets
+`CC = $(srctree)/scripts/gcc-wrapper.py $(REAL_CC)`, and `REAL_CC` is passed as an
+**absolute path** — so merely prepending the masquerade dir to `PATH` does nothing.
+`REAL_CC` / `HOSTCC` must point straight at the ccache wrapper (`CCACHE_CC` in the script).
+
+**GLIBC requirements (this decides the runner image)**:
+
+| Component | Needs GLIBC | Ubuntu 22.04 (2.35) | Ubuntu 24.04 (2.39) |
+|---|---|---|---|
+| `ccache-x86-64` | 2.28 | ✅ | ✅ |
+| `libfaketimeMT.so` | 2.34 | ✅ | ✅ |
+| `libfakestat.so` | **2.38** | ❌ | ✅ |
+
+Both workflows therefore use `runs-on: ubuntu-24.04` (going back to 22.04 breaks
+`libfakestat.so`). The script probes each `.so` at runtime and **degrades gracefully**:
+unloadable libs are dropped with a warning and the build continues (lower hit rate,
+no hard failure).
+
+**Note**: the public presets in `cctv18/public_ccache` target sm8850 / 6.12 and are
+**not** usable for xpeng 5.4.302, so the first build is necessarily cold (~40 min).
+The speedup shows up **from the second build onward**.
 
 ### Artifact naming
 

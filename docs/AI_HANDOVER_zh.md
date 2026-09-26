@@ -162,18 +162,57 @@ gh run view <RUN_ID> --log-failed     # 失败日志
 - 每月 1 日 UTC 00:00（Edge S30）/ 02:00（G200）自动跑（schedule），默认全开模块
 - 网页触发：Actions 页 → Run workflow → 勾选/取消模块选项
 
-### workflow 内部流程（约 40-60 分钟）
+### workflow 内部流程（约 40-60 分钟；开启 ccache 后二次构建显著加快）
 
 1. `actions/checkout` 编译仓库 `5.4.302-s3rxc32.33-8-25-ReSukiSU`
 2. 缓存/下载工具链：`clang-r383902b1`（AOSP）+ GCC 4.9（Lineage 19.1）+ magiskboot
-3. `build_resukisu_boot.sh`：
+3. `actions/cache/restore` 恢复 ccache-ECS 缓存（`~/.ccache_xpeng`）
+4. `build_resukisu_boot.sh`：
    - `fetch_kernel`：clone 内核 fork 的 `5.4.302-s3rxc32.33-8-25-susfs-modules`（--recursive）
    - `update_resukisu`：pin KernelSU 子模块到 59c99fdf（默认）
-   - `setup_toolchain`、`build_kernel`（generate_defconfig → **模块开关** → olddefconfig → Image）
-   - `build_wlan_modules`（WiFi ko）
+   - `setup_toolchain`、`setup_ccache`（约 40 分钟编译前的一次性准备，秒级）
+   - `build_kernel`（generate_defconfig → **模块开关** → olddefconfig → Image）
+   - `ccache_report`：打印 ccache 命中统计到 job summary
+   - `build_wlan_modules`（WiFi ko，**共享同一 ccache**）
    - `repack_boot`（magiskboot 打包 boot_ksu.img）
    - `pack_anykernel3`（Image + WiFi kos，AK3 命名）
-4. 上传 artifact + 创建 GitHub Release（body 含模块勾选状态）
+5. `actions/cache/save` 回写 ccache 缓存（仅当未命中且 `enable_ccache != false`）
+6. 上传 artifact + 创建 GitHub Release（body 含模块勾选状态）
+
+### ccache-ECS 编译缓存（可选，默认开启）
+
+参照 cctv18 的 ccache-ECS 方案移植，用于消除重复编译的耗时。
+用 `enable_ccache`（workflow）或 `ENABLE_CCACHE=false`（本地）关闭。
+
+| 组件 | 说明 |
+|---|---|
+| `scripts/ci/ccache-ecs/ccache-x86-64` | ccache-ECS 二进制（仓库内置，无需联网下载） |
+| `scripts/ci/ccache-ecs/libfakestat.so` | 固定文件 mtime（劫持 stat/open/openat/statx） |
+| `scripts/ci/ccache-ecs/libfaketimeMT.so` | 固定 `__DATE__`/`__TIME__`/`clock_gettime` |
+
+**工作方式**：`setup_ccache()` 建一个 masquerade 目录（内含名为 `clang`/`clang++` 的 wrapper），
+wrapper 先 `LD_PRELOAD` 两个 fake-time 库再 exec ccache。缓存目录 `~/.ccache_xpeng`，
+上限 3G，key 含 `susfs_version` + 分支 + run_id，restore-keys 前缀模糊匹配。
+
+**关键约束（改代码时必看）**：内核 `Makefile` 里 `CC = $(srctree)/scripts/gcc-wrapper.py $(REAL_CC)`，
+`REAL_CC` 以**绝对路径**传入，所以只把 masquerade 目录加进 `PATH` **不生效**——
+`REAL_CC` / `HOSTCC` 必须直接指向 ccache wrapper（脚本里的 `CCACHE_CC`）。
+
+**GLIBC 要求（决定 runner 版本）**：
+
+| 组件 | 需要 GLIBC | Ubuntu 22.04 (2.35) | Ubuntu 24.04 (2.39) |
+|---|---|---|---|
+| `ccache-x86-64` | 2.28 | ✅ | ✅ |
+| `libfaketimeMT.so` | 2.34 | ✅ | ✅ |
+| `libfakestat.so` | **2.38** | ❌ | ✅ |
+
+因此两个 workflow 的 `runs-on` 都是 **`ubuntu-24.04`**（降回 22.04 会导致
+`libfakestat.so` 加载失败）。脚本里对 `.so` 做了**运行时探测 + 优雅降级**：
+加载失败的库会被剔除并打 warning，构建继续进行（只是缓存命中率下降），不会硬失败。
+
+**注意**：`cctv18/public_ccache` 的公共预置包是按 sm8850 / 6.12 生成的，
+对 xpeng 5.4.302 **不适用**，因此首次构建必然是冷缓存（约 40 分钟），
+**从第二次构建开始**才能看到明显的加速效果。
 
 ### 产物命名
 
