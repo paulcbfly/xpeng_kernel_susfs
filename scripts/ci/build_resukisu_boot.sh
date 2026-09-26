@@ -474,6 +474,14 @@ setup_ccache() {
 
   make_masq() {
     local name="$1" real="$2"
+    # Only ever create plain basenames inside the masquerade dir. A prefix taken
+    # from CROSS_COMPILE may itself contain a path (e.g.
+    # `.../bin/aarch64-linux-android-`), and joining it verbatim would yield
+    # `masq/.../bin/aarch64-linux-android-clang`, whose parent dirs do not exist.
+    name="$(basename "${name}")"
+    # Skip wrappers whose real compiler is absent; a dangling wrapper would only
+    # fail much later inside the build with a confusing exec error.
+    [[ -x "${real}" ]] || { warn "skipping ccache wrapper ${name}: ${real} not executable"; return 0; }
     cat > "${masq_dir}/${name}" <<WRAPPER
 #!/bin/bash
 export LD_PRELOAD="${LD_PRELOAD_TMP}"
