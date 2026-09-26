@@ -463,48 +463,48 @@ setup_ccache() {
     printf '\nsloppiness = file_stat_matches,include_file_ctime,include_file_mtime,pch_defines,file_macro,time_macros\n' >> "${conf}"
   fi
 
-  # --- masquerade wrappers --------------------------------------------------
-  # Each wrapper preloads the fake-time libs and hands off to ccache.
-  local masq_dir="${WORK_DIR}/ccache-masq"
-  rm -rf "${masq_dir}"
-  mkdir -p "${masq_dir}"
+  # --- compiler / linker wrappers -------------------------------------------
+  # Mirrors the upstream ccache-ECS scheme (cctv18/oppo_oplus_realme_sm8850):
+  # a tiny `cc-wrapper` that preloads the fake-time libs and hands off to ccache,
+  # plus an `ld-wrapper` that does the same for the linker. Both are passed to
+  # make via CC= / LD= directly.
+  #
+  # Do NOT route these through PATH or REAL_CC: the kernel composes
+  # `CC = scripts/gcc-wrapper.py $(REAL_CC)`, and pointing REAL_CC at a PATH-based
+  # masquerade dir makes gcc-wrapper.py re-enter the ccache wrapper recursively.
+  local wrap_dir="${WORK_DIR}/ccache-wrap"
+  rm -rf "${wrap_dir}"
+  mkdir -p "${wrap_dir}"
+
   local real_clang="${CLANG}"
-  local real_dir
-  real_dir="$(dirname "${real_clang}")"
+  local real_ld="${LD_LLD}"
 
-  make_masq() {
-    local name="$1" real="$2"
-    # Only ever create plain basenames inside the masquerade dir. A prefix taken
-    # from CROSS_COMPILE may itself contain a path (e.g.
-    # `.../bin/aarch64-linux-android-`), and joining it verbatim would yield
-    # `masq/.../bin/aarch64-linux-android-clang`, whose parent dirs do not exist.
-    name="$(basename "${name}")"
-    # Skip wrappers whose real compiler is absent; a dangling wrapper would only
-    # fail much later inside the build with a confusing exec error.
-    [[ -x "${real}" ]] || { warn "skipping ccache wrapper ${name}: ${real} not executable"; return 0; }
-    cat > "${masq_dir}/${name}" <<WRAPPER
-#!/bin/bash
-export LD_PRELOAD="${LD_PRELOAD_TMP}"
-export FAKESTAT="${FAKESTAT}"
-export FAKETIME="${FAKETIME}"
-exec "${ccache_bin}" "${real}" "\$@"
-WRAPPER
-    chmod +x "${masq_dir}/${name}"
-  }
+  {
+    echo '#!/bin/bash'
+    echo "export LD_PRELOAD=\"${LD_PRELOAD_TMP}\""
+    echo "export FAKESTAT=\"${FAKESTAT}\""
+    echo "export FAKETIME=\"${FAKETIME}\""
+    echo "ccache ${real_clang} \"\$@\""
+  } > "${wrap_dir}/cc-wrapper"
 
-  make_masq clang   "${real_dir}/clang"
-  make_masq clang++ "${real_dir}/clang++"
-  # CROSS_COMPILE-prefixed compilers also route through ccache.
-  make_masq "${AARCH64_PREFIX}clang" "${real_dir}/clang"
+  {
+    echo '#!/bin/bash'
+    echo "export LD_PRELOAD=\"${LD_PRELOAD_TMP}\""
+    echo "export FAKESTAT=\"${FAKESTAT}\""
+    echo "export FAKETIME=\"${FAKETIME}\""
+    echo "${real_ld} \"\$@\""
+  } > "${wrap_dir}/ld-wrapper"
 
-  export PATH="${masq_dir}:${PATH}"
-  export CCACHE_MASQ_DIR="${masq_dir}"
+  chmod +x "${wrap_dir}/cc-wrapper" "${wrap_dir}/ld-wrapper"
 
-  # The kernel sets `CC = scripts/gcc-wrapper.py $(REAL_CC)`, so REAL_CC has to
-  # point straight at the ccache wrapper — putting the masquerade dir on PATH is
-  # not enough, because REAL_CC is passed as an absolute path.
-  CCACHE_CC="${masq_dir}/clang"
+  # `ccache` on PATH, exactly as upstream does, so the wrapper's bare `ccache`
+  # resolves. Prepending a dir that only holds this one binary keeps it scoped.
+  ln -sf "${ccache_bin}" "${wrap_dir}/ccache"
+  export PATH="${wrap_dir}:${PATH}"
+
+  CCACHE_CC="${wrap_dir}/cc-wrapper"
   export CCACHE_CC
+  export CCACHE_LD="${wrap_dir}/ld-wrapper"
 
   "${ccache_bin}" -M "${CCACHE_MAXSIZE}" >/dev/null 2>&1 || true
   "${ccache_bin}" -o compression=true >/dev/null 2>&1 || true
@@ -513,8 +513,9 @@ WRAPPER
   ccache_ver="$("${ccache_bin}" --version 2>/dev/null | head -1 || true)"
   info "ccache-ECS: ${ccache_ver}"
   info "CCACHE_DIR=${CCACHE_DIR} CCACHE_MAXSIZE=${CCACHE_MAXSIZE}"
-  info "masquerade dir=${masq_dir}"
-  info "REAL_CC will be: ${CCACHE_CC}"
+  info "wrapper dir=${wrap_dir}"
+  info "CC=${CCACHE_CC}"
+  info "LD=${CCACHE_LD}"
   info "ccache stats (before build):"
   "${ccache_bin}" -s 2>/dev/null || true
 
@@ -576,26 +577,32 @@ build_kernel() {
   hostcflags="-I${KERNEL_DIR}/include/uapi -I/usr/include -I/usr/include/x86_64-linux-gnu -I${KERNEL_DIR}/include -L/usr/lib -L/usr/lib/x86_64-linux-gnu -fuse-ld=lld"
   hostldflags="-L/usr/lib -L/usr/lib/x86_64-linux-gnu -fuse-ld=lld"
 
-  # When ccache-ECS is active, REAL_CC points at the ccache wrapper so every
-  # translation unit goes through the cache; otherwise it is the raw clang.
-  local real_cc="${CCACHE_CC:-${CLANG}}"
-  info "REAL_CC=${real_cc}"
+  # When ccache-ECS is active, CC/LD point at the cc-wrapper/ld-wrapper so every
+  # translation unit goes through the cache; otherwise they are the raw tools.
+  # CC must be the absolute path to the wrapper (upstream does the same) — the
+  # kernel's `CC = scripts/gcc-wrapper.py $(REAL_CC)` indirection would otherwise
+  # re-enter the wrapper recursively.
+  local cc_bin="${CCACHE_CC:-${CLANG}}"
+  local ld_bin="${CCACHE_LD:-${LD_LLD}}"
+  info "CC=${cc_bin}"
+  info "REAL_CC=${CLANG}"
 
   local common_make=(
     ARCH=arm64
     CROSS_COMPILE="${AARCH64_PREFIX}"
-    REAL_CC="${real_cc}"
+    CC="${cc_bin}"
+    REAL_CC="${CLANG}"
     CLANG_TRIPLE=aarch64-linux-gnu-
     AR="${LLVM_AR}"
     LLVM_NM="${LLVM_NM}"
-    LD="${LD_LLD}"
+    LD="${ld_bin}"
     NM="${LLVM_NM}"
     DTC_EXT="${DTC_EXT}"
     DTC_OVERLAY_TEST_EXT="${UFDT_EXT}"
     CONFIG_BUILD_ARM64_DT_OVERLAY=y
-    HOSTCC="${real_cc}"
+    HOSTCC="${cc_bin}"
     HOSTAR="${LLVM_AR}"
-    HOSTLD="${LD_LLD}"
+    HOSTLD="${ld_bin}"
   )
 
   info "generate_defconfig vendor/lahaina-qgki_defconfig"
@@ -612,12 +619,12 @@ build_kernel() {
 
   MAKE_PATH= ARCH=arm64 \
     CROSS_COMPILE="${AARCH64_PREFIX}" \
-    REAL_CC="${real_cc}" CLANG_TRIPLE=aarch64-linux-gnu- \
-    AR="${LLVM_AR}" LLVM_NM="${LLVM_NM}" LD="${LD_LLD}" NM="${LLVM_NM}" \
+    CC="${cc_bin}" REAL_CC="${CLANG}" CLANG_TRIPLE=aarch64-linux-gnu- \
+    AR="${LLVM_AR}" LLVM_NM="${LLVM_NM}" LD="${ld_bin}" NM="${LLVM_NM}" \
     KERN_OUT="${OUT_DIR}" \
     DTC_EXT="${DTC_EXT}" DTC_OVERLAY_TEST_EXT="${UFDT_EXT}" \
     CONFIG_BUILD_ARM64_DT_OVERLAY=y \
-    HOSTCC="${real_cc}" HOSTAR="${LLVM_AR}" HOSTLD="${LD_LLD}" \
+    HOSTCC="${cc_bin}" HOSTAR="${LLVM_AR}" HOSTLD="${ld_bin}" \
     TARGET_BUILD_VARIANT="${TARGET_BUILD_VARIANT}" \
     TARGET_PRODUCT="${TARGET_PRODUCT}" \
     "${KERNEL_DIR}/scripts/gki/generate_defconfig.sh" vendor/lahaina-qgki_defconfig
@@ -892,6 +899,7 @@ build_wlan_and_pack() {
     WLAN_TAG="${WLAN_TAG}" JOBS="${JOBS}" \
     CLANG="${CLANG}" MAKE="${MAKE}" AARCH64_PREFIX="${AARCH64_PREFIX}" \
     CCACHE_CC="${CCACHE_CC:-}" \
+    CCACHE_LD="${CCACHE_LD:-}" \
     LD_LLD="${LD_LLD}" LLVM_AR="${LLVM_AR}" LLVM_NM="${LLVM_NM}" \
     DTC_EXT="${DTC_EXT}" UFDT_EXT="${UFDT_EXT}" \
     bash "${wlan_script}"
