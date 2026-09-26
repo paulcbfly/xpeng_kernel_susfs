@@ -189,15 +189,39 @@ Ported from cctv18's ccache-ECS scheme to cut repeat-build time. Turn it off wit
 | `scripts/ci/ccache-ecs/libfakestat.so` | Pins file mtime (hooks stat/open/openat/statx) |
 | `scripts/ci/ccache-ecs/libfaketimeMT.so` | Pins `__DATE__`/`__TIME__`/`clock_gettime` |
 
-**How it works**: `setup_ccache()` builds a masquerade dir holding wrappers named
-`clang`/`clang++`; each wrapper `LD_PRELOAD`s the fake-time libs before exec'ing ccache.
+**How it works**: `setup_ccache()` writes two wrappers into `${WORK_DIR}/ccache-wrap/`:
+
+```bash
+# cc-wrapper
+#!/bin/bash
+export LD_PRELOAD="<libfakestat.so> <libfaketimeMT.so>"
+export FAKESTAT="2026-01-01 12:00:00"
+export FAKETIME="@2026-01-01 13:00:00"
+ccache <absolute path to the real clang> "$@"
+```
+
+`ld-wrapper` is the same with the real `ld.lld` at the end. Both are handed to make
+directly via `CC=<abs path to cc-wrapper>` / `LD=<abs path to ld-wrapper>` (this mirrors
+upstream cctv18). The `ccache` binary is symlinked into the wrapper dir and that dir is
+prepended to `PATH` so the bare `ccache` inside the wrapper resolves.
+
 Cache lives in `~/.ccache_xpeng` (3G max); the key contains `susfs_version` + branch +
 run_id, with prefix-based restore-keys.
 
-**Critical constraint**: the kernel Makefile sets
-`CC = $(srctree)/scripts/gcc-wrapper.py $(REAL_CC)`, and `REAL_CC` is passed as an
-**absolute path** — so merely prepending the masquerade dir to `PATH` does nothing.
-`REAL_CC` / `HOSTCC` must point straight at the ccache wrapper (`CCACHE_CC` in the script).
+**Critical constraints (read before touching this code)**:
+
+1. The kernel Makefile (`Makefile:466`) sets
+   `CC = $(srctree)/scripts/gcc-wrapper.py $(REAL_CC)`. `CC` must therefore be the
+   **absolute path to the wrapper** and `REAL_CC` must stay the **real clang**.
+   An earlier revision tried prepending a masquerade dir to `PATH`; the inner
+   `gcc-wrapper.py` then resolved back to the wrapper, **recursing infinitely** and
+   hanging the build.
+2. **`HOSTCC`/`HOSTLD` must stay on the real compilers** (`${CLANG}` / `${LD_LLD}`) and
+   must **not** point at the wrapper. Otherwise ccache recurses into itself while
+   building the host tools (`scripts/basic/fixdep`, ...), nesting bash until the
+   1000-level limit and killing the build with
+   `warning: shell level (1000) too high` + `fork: retry: Resource temporarily
+   unavailable`.
 
 **GLIBC requirements (this decides the runner image)**:
 
@@ -208,13 +232,41 @@ run_id, with prefix-based restore-keys.
 | `libfakestat.so` | **2.38** | ❌ | ✅ |
 
 Both workflows therefore use `runs-on: ubuntu-24.04` (going back to 22.04 breaks
-`libfakestat.so`). The script probes each `.so` at runtime and **degrades gracefully**:
-unloadable libs are dropped with a warning and the build continues (lower hit rate,
-no hard failure).
+`libfakestat.so`). The script probes each `.so` at runtime with
+`LD_PRELOAD=<so> /bin/true` and **degrades gracefully**: an unloadable lib makes ld.so
+exit non-zero, so the probe is reliable; dropped libs produce a warning and the build
+continues (lower hit rate, no hard failure).
+
+#### Observability contract (read this before calling a build "hung")
+
+make's stdout is **fully buffered** when piped, and `syncconfig` over 65k files is
+genuinely slow, so the log can go tens of seconds to minutes without a new line. In the
+Actions web UI that looks **exactly** like a hang — this repo has already cancelled two
+perfectly healthy builds over it.
+
+Every make invocation is therefore wrapped:
+
+- `mk <label> ...` (inside `build_kernel`): runs make under `stdbuf -oL -eL` and starts a
+  background heartbeat that echoes `[hb] <label>: still running (Ns elapsed)` **every 30s**.
+- `stage <name>`: prints `[+] ENTER <name>` plus the previous stage's elapsed time.
+- `build_chip` in `build_wlan_modules.sh` carries the same heartbeat.
+
+**Rule**: as long as `[hb]` lines keep appearing, the build is alive — **do not cancel**.
+
+#### Cache write-back policy (a trap we already fell into)
+
+The `Save ccache-ECS cache` step uses **`if: success()`**, not `always()`.
+
+Why it matters: with `always()` a **cancelled or crashed run also writes back its cache**.
+Such a run's ccache dir is essentially empty, compressing to ~300 bytes. Because its key
+embeds its own `run_id` (newer than any real cache), **every later run's `restore-keys`
+prefix match resolves to that empty blob**, pinning the cache to nothing and preventing
+it from ever warming up. Two polluted caches (304 / 366 bytes) were deleted, and the step
+now only writes back after a successful build.
 
 **Note**: the public presets in `cctv18/public_ccache` target sm8850 / 6.12 and are
-**not** usable for xpeng 5.4.302, so the first build is necessarily cold (~40 min).
-The speedup shows up **from the second build onward**.
+**not** usable for xpeng 5.4.302, so the first build is necessarily cold (~49.5 min on
+CI). The speedup shows up **from the second build onward**.
 
 #### Do kernel source changes invalidate the cache?
 

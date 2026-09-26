@@ -162,7 +162,7 @@ gh run view <RUN_ID> --log-failed     # 失败日志
 - 每月 1 日 UTC 00:00（Edge S30）/ 02:00（G200）自动跑（schedule），默认全开模块
 - 网页触发：Actions 页 → Run workflow → 勾选/取消模块选项
 
-### workflow 内部流程（约 40-60 分钟；开启 ccache 后二次构建显著加快）
+### workflow 内部流程（CI 冷编译约 49.5 分钟；开启 ccache 后二次构建显著加快）
 
 1. `actions/checkout` 编译仓库 `5.4.302-s3rxc32.33-8-25-ReSukiSU`
 2. 缓存/下载工具链：`clang-r383902b1`（AOSP）+ GCC 4.9（Lineage 19.1）+ magiskboot
@@ -170,13 +170,13 @@ gh run view <RUN_ID> --log-failed     # 失败日志
 4. `build_resukisu_boot.sh`：
    - `fetch_kernel`：clone 内核 fork 的 `5.4.302-s3rxc32.33-8-25-susfs-modules`（--recursive）
    - `update_resukisu`：pin KernelSU 子模块到 59c99fdf（默认）
-   - `setup_toolchain`、`setup_ccache`（约 40 分钟编译前的一次性准备，秒级）
-   - `build_kernel`（generate_defconfig → **模块开关** → olddefconfig → Image）
+   - `setup_toolchain`、`setup_ccache`（编译前的一次性准备，秒级）
+   - `build_kernel`（generate_defconfig → **模块开关** → olddefconfig → headers_install → Image）
    - `ccache_report`：打印 ccache 命中统计到 job summary
    - `build_wlan_modules`（WiFi ko，**共享同一 ccache**）
    - `repack_boot`（magiskboot 打包 boot_ksu.img）
    - `pack_anykernel3`（Image + WiFi kos，AK3 命名）
-5. `actions/cache/save` 回写 ccache 缓存（仅当未命中且 `enable_ccache != false`）
+5. `actions/cache/save` 回写 ccache 缓存（**仅当构建成功**、未精确命中且 `enable_ccache != false`）
 6. 上传 artifact + 创建 GitHub Release（body 含模块勾选状态）
 
 ### ccache-ECS 编译缓存（可选，默认开启）
@@ -190,13 +190,36 @@ gh run view <RUN_ID> --log-failed     # 失败日志
 | `scripts/ci/ccache-ecs/libfakestat.so` | 固定文件 mtime（劫持 stat/open/openat/statx） |
 | `scripts/ci/ccache-ecs/libfaketimeMT.so` | 固定 `__DATE__`/`__TIME__`/`clock_gettime` |
 
-**工作方式**：`setup_ccache()` 建一个 masquerade 目录（内含名为 `clang`/`clang++` 的 wrapper），
-wrapper 先 `LD_PRELOAD` 两个 fake-time 库再 exec ccache。缓存目录 `~/.ccache_xpeng`，
-上限 3G，key 含 `susfs_version` + 分支 + run_id，restore-keys 前缀模糊匹配。
+**工作方式**：`setup_ccache()` 在 `${WORK_DIR}/ccache-wrap/` 下生成两个 wrapper：
 
-**关键约束（改代码时必看）**：内核 `Makefile` 里 `CC = $(srctree)/scripts/gcc-wrapper.py $(REAL_CC)`，
-`REAL_CC` 以**绝对路径**传入，所以只把 masquerade 目录加进 `PATH` **不生效**——
-`REAL_CC` / `HOSTCC` 必须直接指向 ccache wrapper（脚本里的 `CCACHE_CC`）。
+```bash
+# cc-wrapper
+#!/bin/bash
+export LD_PRELOAD="<libfakestat.so> <libfaketimeMT.so>"
+export FAKESTAT="2026-01-01 12:00:00"
+export FAKETIME="@2026-01-01 13:00:00"
+ccache <真实 clang 绝对路径> "$@"
+```
+
+`ld-wrapper` 同理（末尾换成真实 `ld.lld`）。两者通过 make 命令行
+`CC=<cc-wrapper 绝对路径>` / `LD=<ld-wrapper 绝对路径>` **直接传入**（照抄上游
+cctv18 的做法）。`ccache` 二进制软链到 wrapper 目录并 prepend 到 `PATH`，
+让 wrapper 里的裸 `ccache` 能解析到。
+
+缓存目录 `~/.ccache_xpeng`，上限 3G，key 含 `susfs_version` + 分支 + run_id，
+restore-keys 前缀模糊匹配。
+
+**关键约束（改代码时必看）**：
+
+1. 内核 `Makefile:466` 是 `CC = $(srctree)/scripts/gcc-wrapper.py $(REAL_CC)`，
+   `CC` 必须直接是 wrapper 的绝对路径，`REAL_CC` 必须保持**真实 clang**。
+   早期版本试过「把 masquerade 目录 prepend 到 `PATH`」，结果
+   `gcc-wrapper.py` 里层又解析回 wrapper，**无限递归**，构建直接卡死。
+2. **`HOSTCC`/`HOSTLD` 必须保持真实编译器**（`${CLANG}` / `${LD_LLD}`），
+   **不能**指向 wrapper。否则编译 host 工具（`scripts/basic/fixdep` 等）时
+   ccache 会自递归，嵌套 bash 到 1000 层上限，日志里出现
+   `warning: shell level (1000) too high` + `fork: retry: Resource temporarily
+   unavailable`，构建随即死掉。
 
 **GLIBC 要求（决定 runner 版本）**：
 
@@ -208,10 +231,37 @@ wrapper 先 `LD_PRELOAD` 两个 fake-time 库再 exec ccache。缓存目录 `~/.
 
 因此两个 workflow 的 `runs-on` 都是 **`ubuntu-24.04`**（降回 22.04 会导致
 `libfakestat.so` 加载失败）。脚本里对 `.so` 做了**运行时探测 + 优雅降级**：
-加载失败的库会被剔除并打 warning，构建继续进行（只是缓存命中率下降），不会硬失败。
+`probe_preload()` 用 `LD_PRELOAD=<so> /bin/true` 探测，加载失败时 ld.so 会让
+进程以非 0 退出，因此探测可靠；失败的库会被剔除并打 warning，
+构建继续进行（只是缓存命中率下降），不会硬失败。
+
+#### 可观测性约定（排查「看起来卡住」时必读）
+
+make 的 stdout 被管道接走时是**全缓冲**的，加上 `syncconfig` 要解析 6.5 万个文件，
+日志里会出现**几十秒到几分钟没有任何新行**的区间。这在 Actions 网页上看
+**和真卡死完全一样**，本项目就因此误判并取消了两次正常运行的构建。
+
+因此所有 make 调用都统一走两个包装：
+
+- `mk <label> ...`（`build_kernel` 内）：`stdbuf -oL -eL` 强制行缓冲，
+  并起一个后台心跳，**每 30 秒**echo 一行 `[hb] <label>: still running (Ns elapsed)`。
+- `stage <name>`：每个阶段打 `[+] ENTER <name>` 和上阶段耗时。
+- `build_wlan_modules.sh` 里的 `build_chip` 同样带心跳。
+
+**判断准则**：日志里只要还在出现 `[hb]`，构建就是活的，**不要取消**。
+
+#### 缓存回写策略（踩过的坑）
+
+`Save ccache-ECS cache` 步骤的条件是 **`if: success()`**，不是 `always()`。
+
+原因：`always()` 会让**被取消/崩溃的 run 也回写缓存**。这些 run 的 ccache 目录
+几乎是空的，压缩后只有 ~300 字节。而它的 key 里带着自己的 `run_id`（比任何
+真实缓存都新），于是**后续每次 run 的 `restore-keys` 前缀匹配都会命中这个空包**，
+缓存被永久钉死在空状态，**永远热不起来**。已删除两个污染缓存（304 / 366 字节），
+并改为只在构建成功时才回写。
 
 **注意**：`cctv18/public_ccache` 的公共预置包是按 sm8850 / 6.12 生成的，
-对 xpeng 5.4.302 **不适用**，因此首次构建必然是冷缓存（约 40 分钟），
+对 xpeng 5.4.302 **不适用**，因此首次构建必然是冷缓存（CI 约 49.5 分钟），
 **从第二次构建开始**才能看到明显的加速效果。
 
 #### 改内核源码会不会让缓存失效？
