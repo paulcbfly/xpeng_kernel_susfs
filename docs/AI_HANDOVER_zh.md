@@ -265,11 +265,25 @@ export KERNEL_BRANCH=5.4.302-s3rxc32.33-8-25-susfs-modules
 
 ## 7. 未来升级路径
 
-### 升级 SUSFS v2.3.0 / 最新 ReSukiSU — 第二次尝试进行中
+### SUSFS v2.2 与 v2.3 双版本并行（当前状态）
+
+**现状**：SUSFS **v2.2 与 v2.3 现在都是可用版本**，通过 workflow 输入 `susfs_version`
+（或本地环境变量 `SUSFS_VERSION`）切换，默认 **v2.2**。
+
+| SUSFS 版本 | 内核分支 | 稳定性 |
+|---|---|---|
+| **v2.2**（默认） | `5.4.302-s3rxc32.33-8-25-susfs-modules` | ✅ 长期验证，稳定，推荐日常使用 |
+| **v2.3** | `5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3-astide` | ⚠️ 较新，已通过编译 + 开机验证；有 bug 可回退 v2.2 |
+
+分支映射写在 `scripts/ci/build_resukisu_boot.sh` 的 `SUSFS_VERSION` case 块里；
+explicit `KERNEL_BRANCH` 仍可覆盖映射（用于临时测试任意分支）。
+产物名带 `SUSFSv2.2` / `SUSFSv2.3` 标识，release tag 与 AK3 zip 名均含该标识，两个版本不会混淆。
+
+### 升级 SUSFS v2.3.0 / 最新 ReSukiSU — 已完成
 
 第一次尝试使用 `bcrtvkcs/susfs4ksu@gki-android16-5.4` 的参考文件替换 `fs/susfs.c`、`include/linux/susfs.h`、`include/linux/susfs_def.h`，并对 v2.2 hook 加兼容 stub，编译通过但刷入 Edge S30 后**卡第一屏反复重启**，已废弃并删除。
 
-第二次尝试改用 `AstideLabs/android_kernel_xiaomi_sm8250`（基于 4.19.y）的 commit `0b8a115ddd41` 作为 SUSFS v2.3 核心来源，并把 hook 点迁移到 v2.3 API。AstideLabs 仓库随后用 `616911eb2dc9` 回退了 `susfs_inline_hook` 方式的 KernelSU 集成（`a7d3ad67a9d5`），因此 xpeng port 保持现有 ReSukiSU 集成不变。
+第二次尝试改用 `AstideLabs/android_kernel_xiaomi_sm8250`（基于 4.19.y）的 commit `0b8a115ddd41` 作为 SUSFS v2.3 核心来源，并把 hook 点迁移到 v2.3 API。AstideLabs 仓库随后用 `616911eb2dc9` 回退了 `susfs_inline_hook` 方式的 KernelSU 集成（`a7d3ad67a9d5`），因此 xpeng port 保持现有 ReSukiSU 集成不变。**本次已全量编译通过并刷机开机成功。**
 
 #### v2.3 的关键 API 变化（务必理解）
 

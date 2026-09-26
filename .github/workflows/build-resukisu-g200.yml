@@ -6,6 +6,14 @@ on:
     - cron: "0 2 1 * *"
   workflow_dispatch:
     inputs:
+      susfs_version:
+        description: "SUSFS version: v2.2 = long-verified stable (recommended); v2.3 = newer, fall back to v2.2 if you hit bugs"
+        required: false
+        default: "v2.2"
+        type: choice
+        options:
+          - "v2.2"
+          - "v2.3"
       resukisu_version:
         description: "ReSukiSU version to build (pinned = verified stable; custom = your own ref)"
         required: false
@@ -95,6 +103,11 @@ jobs:
           BUILD_WLAN: "true"
           KERNEL_VER_LABEL: "5.4.302"
           ROM_ID: S3RXC32.33-8-25
+          # SUSFS version selection. Drives the kernel branch:
+          #   v2.2 -> 5.4.302-s3rxc32.33-8-25-susfs-modules          (stable)
+          #   v2.3 -> 5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3-astide
+          # For scheduled runs the empty value falls back to the script default (v2.2).
+          SUSFS_VERSION: ${{ inputs.susfs_version }}
           # ReSukiSU version selection.
           # For scheduled runs these empty values fall back to the script defaults.
           RESUKISU_VERSION: ${{ inputs.resukisu_version }}
@@ -109,7 +122,9 @@ jobs:
           ENABLE_BBGUARD: ${{ inputs.enable_bbguard }}
           ENABLE_BBRV3: ${{ inputs.enable_bbrv3 }}
           KERNEL_URL: https://github.com/paulcbfly/android_kernel_motorola_xpeng.git
-          KERNEL_BRANCH: 5.4.302-s3rxc32.33-8-25-susfs-modules
+          # KERNEL_BRANCH is intentionally NOT set here: it is derived from
+          # SUSFS_VERSION inside build_resukisu_boot.sh. Set it explicitly only
+          # if you need to override the branch mapping.
           CLANG_GIT_URL: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86
           GCC_GIT_URL: https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git
           GCC_GIT_BRANCH: lineage-19.1

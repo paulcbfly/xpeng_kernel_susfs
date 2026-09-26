@@ -264,11 +264,26 @@ export KERNEL_BRANCH=5.4.302-s3rxc32.33-8-25-susfs-modules
 
 ## 7. Future upgrade paths
 
-### SUSFS v2.3.0 / latest ReSukiSU — second attempt in progress
+### SUSFS v2.2 and v2.3 both available (current state)
 
-A first v2.3 port using `bcrtvkcs/susfs4ksu@gki-android16-5.4` (with backward-compat stubs for v2.2 hooks) compiled but **boot-looped at the first screen** on Edge S30, so it was abandoned and deleted.
+**Status**: SUSFS **v2.2 and v2.3 are both usable**, selected via the workflow input
+`susfs_version` (or the `SUSFS_VERSION` env var locally). Default is **v2.2**.
 
-A second attempt uses `AstideLabs/android_kernel_xiaomi_sm8250` (4.19.y-based) commit `0b8a115ddd41` for the SUSFS v2.3 core and adapts the hook points to the v2.3 API. The AstideLabs repository also reverted its `susfs_inline_hook` KernelSU integration (`616911eb2dc9` reverts `a7d3ad67a9d5`), so the xpeng port keeps the existing ReSukiSU integration unchanged.
+| SUSFS | Kernel branch | Stability |
+|-------|---------------|-----------|
+| **v2.2** (default) | `5.4.302-s3rxc32.33-8-25-susfs-modules` | ✅ long-verified, stable, recommended |
+| **v2.3** | `5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3-astide` | ⚠️ newer; compile- and boot-verified; fall back on bugs |
+
+The branch mapping lives in the `SUSFS_VERSION` case block of
+`scripts/ci/build_resukisu_boot.sh`. An explicit `KERNEL_BRANCH` still overrides it
+(useful for testing an arbitrary branch). Artifact names, release tags, and AK3 zip
+names all carry a `SUSFSv2.2` / `SUSFSv2.3` tag so the two lines never collide.
+
+### SUSFS v2.3.0 / latest ReSukiSU — done
+
+The first attempt used `bcrtvkcs/susfs4ksu@gki-android16-5.4` to replace `fs/susfs.c`, `include/linux/susfs.h`, `include/linux/susfs_def.h` with v2.2 compat stubs; it compiled but **boot-looped on the first screen** on Edge S30 and was abandoned and deleted.
+
+The second attempt uses `AstideLabs/android_kernel_xiaomi_sm8250` (4.19.y-based) commit `0b8a115ddd41` for the SUSFS v2.3 core and adapts the hook points to the v2.3 API. The AstideLabs repository also reverted its `susfs_inline_hook` KernelSU integration (`616911eb2dc9` reverts `a7d3ad67a9d5`), so the xpeng port keeps the existing ReSukiSU integration unchanged. **This attempt passed a full build and booted successfully on device.**
 
 #### Key v2.3 API changes (must understand)
 

@@ -16,6 +16,9 @@ AK3_REPO="${AK3_REPO:-https://github.com/osm0sis/AnyKernel3.git}"
 AK3_REF="${AK3_REF:-master}"
 AK3_DIR="${AK3_DIR:-${WORK_DIR}/AnyKernel3}"
 WLAN_OUT_DIR="${WLAN_OUT_DIR:-${WORK_DIR}/wlan-kos}"
+# SUSFS version in use; exported by build_resukisu_boot.sh. Kept as its own
+# tag so v2.2 and v2.3 builds are distinguishable at a glance.
+SUSFS_VERSION="${SUSFS_VERSION:-v2.2}"
 
 info() { echo "[+] $*"; }
 die() { echo "[!] $*" >&2; exit 1; }
@@ -24,6 +27,11 @@ gh_env() {
   if [[ -n "${GITHUB_ENV:-}" ]]; then
     printf '%s=%s\n' "$1" "$2" >> "${GITHUB_ENV}"
   fi
+}
+
+# Mirrors build_susfs_tag() in build_resukisu_boot.sh, e.g. "SUSFSv2.3".
+build_susfs_tag() {
+  printf 'SUSFS%s' "${SUSFS_VERSION}"
 }
 
 resolve_image() {
@@ -187,17 +195,19 @@ pack_zip() {
 
   # Module suffix tag: mirrors build_module_tag() in build_resukisu_boot.sh.
   # Appends ONLY the optional modules the user checked for this build.
-  local module_tag build_num
+  local module_tag build_num susfs_tag
   module_tag=""
   [[ "${ENABLE_REKERNEL:-true}" == "true" ]]    && module_tag+="-ReKernel"
   [[ "${ENABLE_DROIDSPACES:-true}" == "true" ]] && module_tag+="-DroidSpaces"
   [[ "${ENABLE_BBGUARD:-true}" == "true" ]]     && module_tag+="-BBGuard"
   [[ "${ENABLE_BBRV3:-true}" == "true" ]]       && module_tag+="-BBRv3"
   build_num="${BUILD_NUM:-r${GITHUB_RUN_NUMBER:-$(date -u +%Y%m%d%H%M%S)}}"
+  # SUSFS version tag so v2.2 / v2.3 builds never collide.
+  susfs_tag="$(build_susfs_tag)"
 
-  # AK3-{device}{modules}-{build}
-  # e.g. AK3-xpeng-EdgeS30-ReKernel-DroidSpaces-BBGuard-BBRv3-r3.zip
-  local zip_name="AK3-${VARIANT_SLUG}${module_tag}-${build_num}.zip"
+  # AK3-{device}{modules}-{susfs}-{build}
+  # e.g. AK3-xpeng-EdgeS30-ReKernel-DroidSpaces-BBGuard-BBRv3-SUSFSv2.3-r3.zip
+  local zip_name="AK3-${VARIANT_SLUG}${module_tag}-${susfs_tag}-${build_num}.zip"
   local zip_path="${WORK_DIR}/release/${zip_name}"
 
   rm -f "${zip_path}"

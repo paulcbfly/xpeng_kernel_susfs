@@ -46,8 +46,38 @@ BUILD_WLAN="${BUILD_WLAN:-true}"
 WLAN_TAG="${WLAN_TAG:-MMI-S3RXC32.33-8-29}"
 
 KERNEL_URL="${KERNEL_URL:-https://github.com/paulcbfly/android_kernel_motorola_xpeng.git}"
-# Only SUSFS v2.2 is supported; v2.3 was attempted and abandoned due to bootloop.
-KERNEL_BRANCH="${KERNEL_BRANCH:-5.4.302-s3rxc32.33-8-25-susfs-modules}"
+
+# ---------------------------------------------------------------------------
+# SUSFS version selection.
+#   v2.2 (default) -> 5.4.302-s3rxc32.33-8-25-susfs-modules        (stable)
+#   v2.3           -> 5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3-astide
+# v2.2 is the long-verified stable line. v2.3 is newer (kstat/STATX rework,
+# extra hook coverage) and has boot-verified builds too, but if you hit any
+# bug you can simply rebuild with SUSFS_VERSION=v2.2 to fall back.
+# ---------------------------------------------------------------------------
+SUSFS_VERSION="${SUSFS_VERSION:-v2.2}"
+case "${SUSFS_VERSION}" in
+  v2.2|2.2|susfs2.2|susfs22)
+    SUSFS_VERSION="v2.2"
+    SUSFS_BRANCH_DEFAULT="5.4.302-s3rxc32.33-8-25-susfs-modules"
+    ;;
+  v2.3|2.3|susfs2.3|susfs23)
+    SUSFS_VERSION="v2.3"
+    SUSFS_BRANCH_DEFAULT="5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3-astide"
+    ;;
+  *)
+    echo "[!] Unknown SUSFS_VERSION=${SUSFS_VERSION} (use v2.2 or v2.3)" >&2
+    exit 1
+    ;;
+esac
+# An explicit KERNEL_BRANCH always wins over the SUSFS_VERSION default.
+# Use an explicit "is it already set?" check rather than ${VAR:-default} so that
+# re-running the logic in one shell never leaves a stale branch behind.
+if [[ -z "${KERNEL_BRANCH:-}" ]]; then
+  KERNEL_BRANCH="${SUSFS_BRANCH_DEFAULT}"
+else
+  echo "[+] KERNEL_BRANCH explicitly set to ${KERNEL_BRANCH} (overrides SUSFS_VERSION=${SUSFS_VERSION} mapping)"
+fi
 KERNEL_DIR="${KERNEL_DIR:-${BUILD_ROOT}/.ci-src/android_kernel_motorola_xpeng}"
 
 case "${VARIANT}" in
@@ -95,7 +125,8 @@ gh_env() {
 
 # Build module suffix tag from enabled optional-module toggles.
 # e.g. all on -> "-ReKernel-DroidSpaces-BBGuard-BBRv3", all off -> "".
-# SUSFS is core (always on) and is not part of the tag.
+# SUSFS is core (always on) but its *version* is part of the tag so v2.2 and
+# v2.3 artifacts never collide / are never mistaken for each other.
 build_module_tag() {
   local tag=""
   [[ "${ENABLE_REKERNEL:-true}" == "true" ]] && tag+="-ReKernel"
@@ -103,6 +134,11 @@ build_module_tag() {
   [[ "${ENABLE_BBGUARD:-true}" == "true" ]] && tag+="-BBGuard"
   [[ "${ENABLE_BBRV3:-true}" == "true" ]] && tag+="-BBRv3"
   printf '%s' "${tag}"
+}
+
+# e.g. "SUSFSv2.3" — appended to release/artifact names.
+build_susfs_tag() {
+  printf 'SUSFS%s' "${SUSFS_VERSION}"
 }
 
 # ---------------------------------------------------------------------------
@@ -628,10 +664,12 @@ repack_boot() {
   cp -f new-boot.img "${WORK_DIR}/release/boot_ksu.img"
   cp -f new-boot.img "${WORK_DIR}/release/boot.img"
 
-  # boot_ksu + enabled modules (e.g. boot_ksu-SUSFS.img), per user-approved naming
-  local module_tag
+  # boot_ksu + SUSFS version + enabled modules
+  # e.g. boot_ksu-SUSFSv2.3-ReKernel-DroidSpaces-BBGuard-BBRv3.img
+  local module_tag susfs_tag
   module_tag="$(build_module_tag)"
-  local out_name="boot_ksu${module_tag}.img"
+  susfs_tag="$(build_susfs_tag)"
+  local out_name="boot_ksu${module_tag}-${susfs_tag}.img"
   cp -f new-boot.img "${WORK_DIR}/release/${out_name}"
 
   popd >/dev/null
@@ -644,14 +682,15 @@ repack_boot() {
   fi
 
   case "${VARIANT}" in
-    edge-s30) RELEASE_TAG="MMI-${KERNEL_VER_LABEL}-${ROM_ID}-ReSukiSU-EdgeS30-${build_id}" ;;
-    g200)     RELEASE_TAG="MMI-${KERNEL_VER_LABEL}-${ROM_ID}-ReSukiSU-G200-${build_id}" ;;
+    edge-s30) RELEASE_TAG="MMI-${KERNEL_VER_LABEL}-${ROM_ID}-ReSukiSU-EdgeS30-${susfs_tag}-${build_id}" ;;
+    g200)     RELEASE_TAG="MMI-${KERNEL_VER_LABEL}-${ROM_ID}-ReSukiSU-G200-${susfs_tag}-${build_id}" ;;
   esac
 
   RESUKISU_DISPLAY="${RESUKISU_DISPLAY:-$(cat "${WORK_DIR}/resukisu_display.txt" 2>/dev/null || echo "${RESUKISU_VERSION}@ReSukiSU")}"
-  RELEASE_NAME="${RELEASE_TITLE}"
+  RELEASE_NAME="${RELEASE_TITLE} [${susfs_tag}]"
   BOOT_ARTIFACT="${WORK_DIR}/release/boot_ksu.img"
   export RELEASE_TAG RELEASE_NAME BOOT_ARTIFACT VARIANT_SLUG DEVICE_TITLE KERNEL_VER_LABEL
+  export SUSFS_VERSION KERNEL_BRANCH
 
   gh_env RELEASE_TAG "${RELEASE_TAG}"
   gh_env RELEASE_NAME "${RELEASE_NAME}"
@@ -661,7 +700,10 @@ repack_boot() {
   gh_env ROM_ID "${ROM_ID}"
   gh_env KERNEL_VER_LABEL "${KERNEL_VER_LABEL}"
   gh_env WORK_DIR "${WORK_DIR}"
+  gh_env SUSFS_VERSION "${SUSFS_VERSION}"
+  gh_env KERNEL_BRANCH "${KERNEL_BRANCH}"
 
+  info "SUSFS version: ${SUSFS_VERSION} (kernel branch ${KERNEL_BRANCH})"
   info "Output: ${BOOT_ARTIFACT}"
   info "Release tag: ${RELEASE_TAG}"
   endlog
@@ -721,6 +763,7 @@ pack_anykernel3() {
     WLAN_OUT_DIR="${WLAN_OUT_DIR:-${WORK_DIR}/wlan-kos}" \
     GITHUB_PROXY="${GITHUB_PROXY:-}" \
     ENABLE_SUSFS="${ENABLE_SUSFS:-true}" \
+    SUSFS_VERSION="${SUSFS_VERSION:-v2.2}" \
     ENABLE_REKERNEL="${ENABLE_REKERNEL:-true}" \
     ENABLE_DROIDSPACES="${ENABLE_DROIDSPACES:-true}" \
     ENABLE_BBGUARD="${ENABLE_BBGUARD:-true}" \
@@ -744,12 +787,31 @@ write_release_notes() {
   [[ "${ENABLE_BBGUARD:-true}" == "true" ]]     && mod_bbguard="✅ 勾选 ON"     || mod_bbguard="❌ 未勾选 OFF"
   [[ "${ENABLE_BBRV3:-true}" == "true" ]]       && mod_bbrv3="✅ 勾选 ON"       || mod_bbrv3="❌ 未勾选 OFF"
 
+  # SUSFS version label + stability note
+  local susfs_label susfs_note
+  case "${SUSFS_VERSION:-v2.2}" in
+    v2.3)
+      susfs_label="v2.3.0"
+      susfs_note="较新（kstat/STATX 重构 + 更完整的 hook 覆盖）。本构建已通过编译与开机验证；**如遇到任何 bug，可自行选择 SUSFS_VERSION=v2.2 重新编译回退到稳定版**。"
+      ;;
+    *)
+      susfs_label="v2.2.0"
+      susfs_note="长期验证的**稳定**版本，推荐日常使用。"
+      ;;
+  esac
+
   cat > "${WORK_DIR}/release/RELEASE_NOTES.md" <<EOF
+## SUSFS 版本 (SUSFS version)
+
+本次构建使用 **SUSFS ${susfs_label}**（内核分支 \`${KERNEL_BRANCH}\`）。
+
+${susfs_note}
+
 ## 本次构建的模块选择 (Module options in this build)
 
 | 模块 | 状态 |
 |---|---|
-| **SUSFS** (核心文件系统隐藏，恒开) | ✅ 始终开启 |
+| **SUSFS** ${susfs_label} (核心文件系统隐藏，恒开) | ✅ 始终开启 |
 | **Re:Kernel** v8.5 (进程/应用检测, binder+signal hook) | ${mod_rekernel} |
 | **DroidSpaces** (IPC/PID 命名空间, netfilter/IP_SET, tmpfs ACL) | ${mod_droidspaces} |
 | **BBGuard** (Baseband-guard 基带防格机 LSM) | ${mod_bbguard} |
@@ -782,6 +844,7 @@ This replaces the kernel **and** vendor WiFi \`qca_cld3_*.ko\` (\`do.modules=1\`
 - MYUI: 4.0
 - Android 12
 - ROM: ${ROM_ID}
+- SUSFS: ${susfs_label} (kernel branch \`${KERNEL_BRANCH}\`)
 - ReSukiSU: ${RESUKISU_DISPLAY}
 - NFC: ${nfc_note}
 - WiFi: CRC/vermagic-matched \`qca_cld3_*.ko\` (built with this Image)
@@ -790,10 +853,21 @@ This replaces the kernel **and** vendor WiFi \`qca_cld3_*.ko\` (\`do.modules=1\`
 ## Assets
 - \`boot_ksu.img\` — OEM boot.img with replaced ReSukiSU kernel
 - \`Image\` — raw ARM64 kernel Image
-- \`AnyKernel3-*.zip\` — flashable zip (kernel + vendor WiFi kos; no KernelSU WiFi module needed)
+- \`AK3-*.zip\` — flashable zip (kernel + vendor WiFi kos; no KernelSU WiFi module needed)
 - \`wlan_crc_match_*-ksu-*.zip\` — optional KernelSU/Magisk overlay **only if** you flash \`boot_ksu.img\` via fastboot (does not replace vendor kos)
 
-> Built automatically from \`android_kernel_motorola_xpeng_build\` (\`5.4.302-s3rxc32.33-8-25-ReSukiSU\`) using kernel sources from [android_kernel_motorola_xpeng @ 5.4.302-s3rxc32.33-8-25](https://github.com/LuoJuly/android_kernel_motorola_xpeng/tree/5.4.302-s3rxc32.33-8-25) with ReSukiSU + live-built WiFi kos + latest AnyKernel3 upstream.
+## SUSFS 版本回退 (Falling back to SUSFS v2.2)
+
+SUSFS v2.2 与 v2.3 是**两条独立的内核分支**，产物互不兼容，按需选择：
+
+| SUSFS 版本 | 内核分支 | 稳定性 |
+|---|---|---|
+| **v2.2**（默认） | \`5.4.302-s3rxc32.33-8-25-susfs-modules\` | 长期验证，稳定 |
+| **v2.3** | \`5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3-astide\` | 较新；有 bug 可回退 v2.2 |
+
+触发 workflow 时把 \`susfs_version\` 选为 \`v2.2\` 即可回退；本地构建设 \`SUSFS_VERSION=v2.2\`。
+
+> Built automatically from \`android_kernel_motorola_xpeng_build\` (\`5.4.302-s3rxc32.33-8-25-ReSukiSU\`) using kernel sources from [android_kernel_motorola_xpeng @ ${KERNEL_BRANCH}](https://github.com/paulcbfly/android_kernel_motorola_xpeng/tree/${KERNEL_BRANCH}) with ReSukiSU + SUSFS ${SUSFS_VERSION} + live-built WiFi kos + latest AnyKernel3 upstream.
 EOF
   gh_env RELEASE_NOTES "${WORK_DIR}/release/RELEASE_NOTES.md"
   info "Release notes written"
