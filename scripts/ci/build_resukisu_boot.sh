@@ -508,20 +508,39 @@ build_kernel() {
     "${kc}" --file "${cfg}" --set-str CONFIG_LSM "lockdown,yama,loadpin,safesetid,integrity,selinux,smack,tomoyo,apparmor" || true
   fi
 
+  # ---- BBRv3 ---------------------------------------------------------------
+  # IMPORTANT: this toggle must NOT change the system-wide default qdisc.
+  #
+  # Setting CONFIG_DEFAULT_NET_SCH="fq" (via NET_SCH_DEFAULT + DEFAULT_FQ) makes
+  # fq the default qdisc for EVERY netdevice, including the rmnet/rmnet_data*
+  # interfaces that carry mobile data. fq enables per-flow pacing by default
+  # (rate_enable=1) and its rate model does not match rmnet's QMAP aggregation,
+  # so packets get paced to death and the device shows "signal present, mobile
+  # data on, but no connectivity". This was a real, user-visible regression.
+  #
+  # MMI's own baseline runs cubic + pfifo_fast. We keep that: the BBR code stays
+  # compiled in and selectable, but the default stays cubic. Users who want BBR
+  # can opt in at runtime:
+  #     sysctl -w net.core.default_qdisc=fq
+  #     sysctl -w net.ipv4.tcp_congestion_control=bbr
   if [[ "${ENABLE_BBRV3}" == "true" ]]; then
-    # BBRv3 code is compiled into tcp_bbr.c; the toggle selects it as default CC + fq pacing.
+    # Compile BBR in and make it *available* — but leave the default on cubic.
     "${kc}" --file "${cfg}" --enable TCP_CONG_BBR || true
-    "${kc}" --file "${cfg}" --enable DEFAULT_BBR || true
-    "${kc}" --file "${cfg}" --set-str DEFAULT_TCP_CONG bbr || true
-    "${kc}" --file "${cfg}" --enable NET_SCH_FQ || true
-    "${kc}" --file "${cfg}" --enable NET_SCH_DEFAULT || true
-    "${kc}" --file "${cfg}" --enable DEFAULT_FQ || true
+    "${kc}" --file "${cfg}" --set-str DEFAULT_TCP_CONG cubic || true
+    "${kc}" --file "${cfg}" --disable DEFAULT_BBR || true
+    # Disable the fq-as-default machinery entirely, and clear a stale string
+    # value left behind by earlier builds (DEFAULT_NET_SCH is a string symbol,
+    # so --disable cannot touch it).
+    "${kc}" --file "${cfg}" --disable NET_SCH_DEFAULT || true
+    "${kc}" --file "${cfg}" --disable DEFAULT_FQ || true
+    "${kc}" --file "${cfg}" --set-str DEFAULT_NET_SCH pfifo_fast || true
   else
-    # MMI baseline: cubic default, no fq-as-default (built-in BBRv3 code stays unselected).
+    # Toggle off: identical MMI baseline (cubic + pfifo_fast).
     "${kc}" --file "${cfg}" --set-str DEFAULT_TCP_CONG cubic || true
     "${kc}" --file "${cfg}" --disable DEFAULT_BBR || true
     "${kc}" --file "${cfg}" --disable NET_SCH_DEFAULT || true
     "${kc}" --file "${cfg}" --disable DEFAULT_FQ || true
+    "${kc}" --file "${cfg}" --set-str DEFAULT_NET_SCH pfifo_fast || true
   fi
 
   info "Module switches: ReKernel=${ENABLE_REKERNEL} DroidSpaces=${ENABLE_DROIDSPACES} BBGuard=${ENABLE_BBGUARD} BBRv3=${ENABLE_BBRV3}"
