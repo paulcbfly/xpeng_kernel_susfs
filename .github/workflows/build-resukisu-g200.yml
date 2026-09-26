@@ -11,6 +11,11 @@ on:
         required: false
         default: true
         type: boolean
+      enable_faketime:
+        description: "Use the libfakestat/libfaketime preload shims (fixes cache-key churn). Disable to run plain ccache when isolating failures"
+        required: false
+        default: true
+        type: boolean
       susfs_version:
         description: "SUSFS version: v2.2 = long-verified stable (recommended); v2.3 = newer, fall back to v2.2 if you hit bugs"
         required: false
@@ -128,6 +133,7 @@ jobs:
           # ccache-ECS compile cache. Shared across the Image and vendor .ko
           # builds. Set ENABLE_CCACHE=false to disable.
           ENABLE_CCACHE: "${{ inputs.enable_ccache }}"
+          ENABLE_FAKETIME: "${{ inputs.enable_faketime }}"
           # SUSFS version selection. Drives the kernel branch:
           #   v2.2 -> 5.4.302-s3rxc32.33-8-25-susfs-modules          (stable)
           #   v2.3 -> 5.4.302-s3rxc32.33-8-25-susfs-modules-v2.3-astide

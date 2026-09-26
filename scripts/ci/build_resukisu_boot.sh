@@ -418,6 +418,11 @@ setup_ccache() {
   export FAKESTAT="${FAKESTAT:-2026-01-01 12:00:00}"
   export FAKETIME="${FAKETIME:-@2026-01-01 13:00:00}"
 
+  # ENABLE_FAKETIME=false drops both preload shims and runs plain ccache. Useful
+  # for isolating whether a build failure comes from the time hijacking or from
+  # ccache itself.
+  ENABLE_FAKETIME="${ENABLE_FAKETIME:-true}"
+
   probe_preload() {
     local so="$1"
     [[ -f "${so}" ]] || return 1
@@ -425,19 +430,23 @@ setup_ccache() {
   }
 
   local preload_libs=()
-  if probe_preload "${fakestat_so}"; then
-    preload_libs+=("${fakestat_so}")
+  if [[ "${ENABLE_FAKETIME}" != "true" ]]; then
+    info "ENABLE_FAKETIME=false; running ccache without the fake-time shims"
   else
-    warn "libfakestat.so cannot be loaded (needs GLIBC_2.38+); mtime pinning disabled"
-  fi
-  if probe_preload "${faketime_so}"; then
-    preload_libs+=("${faketime_so}")
-  else
-    warn "libfaketimeMT.so cannot be loaded; __DATE__/time() pinning disabled"
-  fi
+    if probe_preload "${fakestat_so}"; then
+      preload_libs+=("${fakestat_so}")
+    else
+      warn "libfakestat.so cannot be loaded (needs GLIBC_2.38+); mtime pinning disabled"
+    fi
+    if probe_preload "${faketime_so}"; then
+      preload_libs+=("${faketime_so}")
+    else
+      warn "libfaketimeMT.so cannot be loaded; __DATE__/time() pinning disabled"
+    fi
 
-  if ((${#preload_libs[@]} == 0)); then
-    warn "no fake-time preload library usable; ccache will run without timeline pinning"
+    if ((${#preload_libs[@]} == 0)); then
+      warn "no fake-time preload library usable; ccache will run without timeline pinning"
+    fi
   fi
   export LD_PRELOAD_TMP="${preload_libs[*]:-}"
 
