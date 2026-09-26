@@ -620,6 +620,43 @@ build_kernel() {
   )
 
   info "generate_defconfig vendor/lahaina-qgki_defconfig"
+  local t_stage
+  stage() {
+    # Print a progress beacon with elapsed time. GitHub Actions buffers stdout
+    # line-by-line, so anything that runs for minutes without emitting a newline
+    # shows up as a frozen log -- which is indistinguishable from a hang when
+    # you are eyeballing the web UI. Every make invocation below is wrapped so
+    # the log always moves.
+    local now; now=$(date +%s)
+    if [[ -n "${t_stage:-}" ]]; then
+      info "[$1] prev stage took $(( now - t_stage ))s"
+    fi
+    t_stage="$now"
+    info "[+] ENTER $1"
+  }
+
+  # Run make with line-buffered output plus a background heartbeat, so a long
+  # silent phase (syncconfig on a 65k-file tree, ccache cold start, ...) still
+  # produces a visible tick every 30s instead of looking like a freeze.
+  mk() {
+    local label="$1"; shift
+    local hb_pid
+    (
+      local n=0
+      while :; do
+        sleep 30
+        n=$(( n + 30 ))
+        echo "[hb] ${label}: still running (${n}s elapsed)"
+      done
+    ) &
+    hb_pid=$!
+    local rc=0
+    stdbuf -oL -eL "${MAKE}" "$@" || rc=$?
+    kill "${hb_pid}" 2>/dev/null || true
+    wait "${hb_pid}" 2>/dev/null || true
+    return "${rc}"
+  }
+
   rm -rf "${OUT_DIR}"
   mkdir -p "${OUT_DIR}"
 
@@ -631,6 +668,7 @@ build_kernel() {
   source "${KERNEL_DIR}/scripts/gki/envsetup.sh" lahaina
   set -e
 
+  stage "generate_defconfig"
   MAKE_PATH= ARCH=arm64 \
     CROSS_COMPILE="${AARCH64_PREFIX}" \
     CC="${cc_bin}" REAL_CC="${CLANG}" CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -643,8 +681,8 @@ build_kernel() {
     TARGET_PRODUCT="${TARGET_PRODUCT}" \
     "${KERNEL_DIR}/scripts/gki/generate_defconfig.sh" vendor/lahaina-qgki_defconfig
 
-  info "defconfig"
-  "${MAKE}" -j"${JOBS}" -C "${KERNEL_DIR}" O="${OUT_DIR}" \
+  info "defconfig (-j${JOBS})"
+  mk "defconfig" -j"${JOBS}" -C "${KERNEL_DIR}" O="${OUT_DIR}" \
     "${common_make[@]}" \
     HOSTCFLAGS="${hostcflags}" HOSTLDFLAGS="${hostldflags}" \
     vendor/lahaina-qgki_defconfig
@@ -714,19 +752,23 @@ build_kernel() {
 
   info "Module switches: ReKernel=${ENABLE_REKERNEL} DroidSpaces=${ENABLE_DROIDSPACES} BBGuard=${ENABLE_BBGUARD} BBRv3=${ENABLE_BBRV3}"
 
-  "${MAKE}" -j"${JOBS}" -C "${KERNEL_DIR}" O="${OUT_DIR}" \
+  stage "olddefconfig"
+  info "olddefconfig (-j${JOBS})"
+  mk "olddefconfig" -j"${JOBS}" -C "${KERNEL_DIR}" O="${OUT_DIR}" \
     "${common_make[@]}" \
     HOSTCFLAGS="${hostcflags}" HOSTLDFLAGS="${hostldflags}" \
     olddefconfig
 
-  info "headers_install"
-  "${MAKE}" -j"${JOBS}" -C "${KERNEL_DIR}" O="${OUT_DIR}" \
+  stage "headers_install"
+  info "headers_install (-j${JOBS})"
+  mk "headers_install" -j"${JOBS}" -C "${KERNEL_DIR}" O="${OUT_DIR}" \
     "${common_make[@]}" \
     HOSTCFLAGS="${hostcflags}" HOSTLDFLAGS="${hostldflags}" \
     headers_install
 
-  info "Compiling Image (-j${JOBS})"
-  "${MAKE}" -j"${JOBS}" -C "${KERNEL_DIR}" O="${OUT_DIR}" \
+  stage "Image"
+  info "Image (-j${JOBS})"
+  mk "Image" -j"${JOBS}" -C "${KERNEL_DIR}" O="${OUT_DIR}" \
     "${common_make[@]}" \
     HOSTCFLAGS="${hostcflags}" HOSTLDFLAGS="${hostldflags}"
 

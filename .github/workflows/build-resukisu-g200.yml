@@ -91,7 +91,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             bison flex bc libssl-dev libelf-dev cpio \
-            python3 curl ca-certificates git rsync xz-utils zip kmod
+            python3 curl ca-certificates git rsync xz-utils zip kmod coreutils
 
       - name: Checkout build scripts
         uses: actions/checkout@v4
@@ -171,9 +171,13 @@ jobs:
           scripts/ci/build_resukisu_boot.sh
 
       # Save the ccache-ECS cache so the next run can skip recompilation.
-      # Skipped when the cache was restored exactly (already up to date).
+      # Only saved when the build step actually SUCCEEDED. Using always() here
+      # is actively harmful: a cancelled or crashed run would persist an empty
+      # (~300 byte) archive under its run_id, and because that key is newer it
+      # then wins the restore-keys prefix match on every later run -- pinning
+      # the cache to whatever empty blob the last failed run left behind.
       - name: Save ccache-ECS cache
-        if: always() && inputs.enable_ccache != false && steps.ccache-restore.outputs.cache-hit != 'true'
+        if: success() && inputs.enable_ccache != false && steps.ccache-restore.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ~/.ccache_xpeng

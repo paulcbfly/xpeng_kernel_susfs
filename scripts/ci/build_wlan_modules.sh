@@ -113,13 +113,28 @@ build_chip() {
   info "Build chip=${chip}"
   # Force rebuild against current Module.symvers / vermagic
   find "${mdir}" \( -name '*.o' -o -name '*.ko' -o -name '.*.cmd' -o -name '*.mod' -o -name '*.mod.c' -o -name '*.lto.o' \) -delete 2>/dev/null || true
-  "${MAKE}" -j"${JOBS}" -C "${OUT_DIR}" M="${mdir}" \
+  # Line-buffered output + 30s heartbeat: a silent make phase must not look
+  # like a frozen log in the Actions UI.
+  (
+    local n=0
+    while :; do
+      sleep 30
+      n=$(( n + 30 ))
+      echo "[hb] wlan.${chip}: still running (${n}s elapsed)"
+    done
+  ) &
+  local hb_pid=$!
+  local rc=0
+  stdbuf -oL -eL "${MAKE}" -j"${JOBS}" -C "${OUT_DIR}" M="${mdir}" \
     "${COMMON[@]}" \
     modules \
     WLAN_ROOT="vendor/qcom/opensource/wlan/qcacld-3.0/.${chip}" \
     DYNAMIC_SINGLE_CHIP="${chip}" \
     DEVNAME="${chip}" \
-    "${cnss_flag}"
+    "${cnss_flag}" || rc=$?
+  kill "${hb_pid}" 2>/dev/null || true
+  wait "${hb_pid}" 2>/dev/null || true
+  (( rc == 0 )) || die "make wlan.${chip} failed (rc=${rc})"
   [[ -f "${mdir}/wlan.ko" ]] || die "missing ${mdir}/wlan.ko"
 }
 
